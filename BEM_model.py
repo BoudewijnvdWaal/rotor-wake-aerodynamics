@@ -23,11 +23,13 @@ airfoil = 'polar DU95W180.xlsx'
 data=pd.read_excel(airfoil, header=0,
                     names = ["alpha", "cl", "cd", "cm"]).dropna()
 
-polar_data = data.drop(data.index[0]) # drop first row with header info
+data = data.drop(data.index[0]) # drop first row with header info
 
 polar_alpha = data['alpha'][:]
 polar_cl = data['cl'][:]
 polar_cd = data['cd'][:]
+
+print(polar_alpha)
 
 # Operational specs
 U0 = 10 # m/s, free stream velocity
@@ -91,8 +93,6 @@ def PrandtlTipRootCorrection(r_R, rootradius_R, tipradius_R, TSR, NBlades, axial
 
 
 
-
-
 # --------- Module 3 : Visualiser ---------
 # plot Prandtl tip, root and combined correction for a number of blades and induction 'a', over the non-dimensioned radius
 r_R = np.arange(0.1, 1, .01)
@@ -120,7 +120,6 @@ axs[1].set_xlim([0,.1])
 axs[1].set_xlabel(r'$C_d$')
 axs[1].grid()
 plt.show()
-
 
 
 # --------- Module 99 : Actuator Disk Model ---------
