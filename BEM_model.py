@@ -10,6 +10,7 @@ import pandas as pd
 
 # --------- Module 0 : Initialistation ---------
 
+
 # BLOCK 0.1 : Rotor specs
 Radius = 50 # m
 blades = 3 # number of blades
@@ -17,11 +18,25 @@ RootLocation_R = 0.2 # m, distance from center where blades start
 TipLocation_R = 1.0 # m, distance from center where blades end
 blade_pitch = -2 # degrees, pitch angle at the root of the blade
 
-# BLOCK 0.2 : Section streamtubes
-delta_r_R = 0.01 # non-dimensioned width of blade element, in fraction of rotor radius
-r_R = np.arange(RootLocation_R, TipLocation_R + delta_r_R, delta_r_R) # non-dimensioned radial position of blade element, in fraction of rotor radius
-chord_distribution = 3*(1-r_R) + 1 # m, chord distribution along the blade, linearly decreasing from 4 m at the root to 1 m at the tip
-twist_distribution = 14*(1-r_R) # degrees, twist distribution along the blade,
+def initialise(N):
+    # BLOCK 0.2 : Section streamtubes
+    delta_r_R = 1/N # non-dimensioned width of blade element, in fraction of rotor radius
+    #delta_r_R = 0.01 # non-dimensioned width of blade element, in fraction of rotor radius
+    r_R = np.arange(RootLocation_R, TipLocation_R + delta_r_R, delta_r_R) # non-dimensioned radial position of blade element, in fraction of rotor radius
+    chord_distribution = 3*(1-r_R) + 1 # m, chord distribution along the blade, linearly decreasing from 4 m at the root to 1 m at the tip
+    twist_distribution = 14*(1-r_R) # degrees, twist distribution along the blade,
+
+    # BLOCK 0.5 : Prescribe first estimate induction factor for all streamtubes
+    a = np.zeros(np.shape(r_R))+0.3 # axial induction factor, initial estimate
+    aline = np.zeros(np.shape(r_R)) # tangential induction factor, initial estimate
+
+    return r_R, chord_distribution, twist_distribution, a, aline
+
+r_R, chord_distribution, twist_distribution, a, aline = initialise(100) # initialize blade element positions and distributions for 100 blade elements
+print("r_R is ", r_R)
+print("chord_distribution is ", chord_distribution)
+print("twist_distribution is ", twist_distribution)
+print("------------------------------")
 
 # BLOCK 0.4 : Operational specs
 U0 = 10 # m/s, free stream velocity
@@ -31,9 +46,7 @@ Omega = [TSR[i]*U0/Radius for i in range(len(TSR))] # rotational velocity of the
 glauert_correction = True # whether to apply Glauert's correction for heavily loaded rotors
 prandtl_correction = True # whether to apply Prandtl's tip loss correction
 
-# BLOCK 0.5 : Prescribe first estimate induction factor for all streamtubes
-a = np.zeros(np.shape(r_R))+0.3 # axial induction factor, initial estimate
-aline = np.zeros(np.shape(r_R)) # tangential induction factor, initial estimate
+    
 
 
 # --------- Module 1 : Lift and Drag Coefficients ---------
@@ -133,14 +146,14 @@ def solveStreamtube(Uinf, r1_R, r2_R, rootradius_R, tipradius_R , Omega, Radius,
     
     iteration = 0
     Erroriterations = 0.00001 # error limit for iteration process, in absolute value of induction
-    
+
     while np.abs(a-anew) > Erroriterations:
         iteration += 1
         # calculate velocity and loads at blade element
         Urotor = Uinf*(1-a) # axial velocity at rotor
         Utan = (1+aline)*Omega*r_R*Radius # tangential velocity at rotor
         # calculate loads in blade segment in 2D (N/m)
-        fnorm, ftan, gamma = loadBladeElement(Urotor, Utan, r_R,chord, twist, polar_alpha, polar_cl, polar_cd)
+        fnorm, ftan, gamma = loadBladeElement(Urotor, Utan, r_R, chord, twist, polar_alpha, polar_cl, polar_cd)
         load3Daxial =fnorm*Radius*(r2_R-r1_R)*NBlades # 3D force in axial direction
         load3Dtan =ftan*Radius*(r2_R-r1_R)*NBlades # 3D force in azimuthal/tangential direction (not used here)
       
@@ -182,6 +195,8 @@ def executeBEM(Uinf, TSR, RootLocation_R, TipLocation_R , Omega, Radius, NBlades
     print("CT is ", CT)
     print("CP is ", CP)
 
+    return CT, CP, results
+
 
 # --------- Module 5 : Visualiser ---------
 """
@@ -212,9 +227,18 @@ plt.show()
 """
 
 def main():
-    for i in range(len(TSR)):
-        print("Executing BEM for TSR = ", TSR[i])
-        executeBEM(U0, TSR[i], RootLocation_R, TipLocation_R , Omega[i], Radius, blades, chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd)
+    iter_history = np.array([]) # for storing history of iteration process, for visualisation purposes
+    #elements = [5,10,20,50,100,200] # number of annuli to divide blade into, for convergence analysis
+    CTlist = np.zeros(len(TSR))
+    CPlist = np.zeros(len(TSR))
+
+    for j in range(len(TSR)):
+        print("Executing BEM for TSR = ", TSR[j])
+        CT, CP, results = executeBEM(U0, TSR[j], RootLocation_R, TipLocation_R , Omega[j], Radius, blades, chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd)
+        CTlist[j] = CT
+        CPlist[j] = CP
+
+    iter_history = np.append(iter_history, [CTlist, CPlist])
 
 if __name__ == "__main__":
     main()
