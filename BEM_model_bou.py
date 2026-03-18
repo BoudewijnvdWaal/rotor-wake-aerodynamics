@@ -6,416 +6,430 @@ Authors: Thijmen God, Boudewijn van der Waal, Rens van Lierop
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+import os
+import glob
 
 
-# --------- Module 0 : Initialisation ---------
+# --------- Module 0 : Initialistation ---------
 
 # BLOCK 0.1 : Rotor specs
-Radius = 50.0                      # m
-blades = 3                         # number of blades
-RootLocation_R = 0.2               # blade starts at r/R = 0.2
-TipLocation_R = 1.0                # blade ends at r/R = 1.0
-blade_pitch = -2.0                 # deg
+Radius = 50  # m
+blades = 3
+RootLocation_R = 0.2
+TipLocation_R = 1.0
+blade_pitch = -2  # deg
 
-# BLOCK 0.2 : Streamtube discretisation
-delta_r_R = 0.01
-r_R = np.arange(RootLocation_R, TipLocation_R + delta_r_R, delta_r_R)
+def initialise(N):
+    delta_r_R = (TipLocation_R - RootLocation_R) / N
+    r_R = np.linspace(RootLocation_R, TipLocation_R, N + 1)
+    chord_distribution = 3 * (1 - r_R) + 1
+    twist_distribution = 14 * (1 - r_R)
 
-chord_distribution = 3 * (1 - r_R) + 1                 # m
-twist_distribution = 14 * (1 - r_R) + blade_pitch      # deg
-# assignment says local blade angle includes blade pitch, so include it here
+    a = np.zeros(len(r_R) - 1) + 0.3
+    aline = np.zeros(len(r_R) - 1)
+
+    return r_R, chord_distribution, twist_distribution, a, aline
+
+r_R, chord_distribution, twist_distribution, a, aline = initialise(100)
 
 # BLOCK 0.4 : Operational specs
-U0 = 10.0
-TSR_list = [6, 8, 10]
-Omega_list = [tsr * U0 / Radius for tsr in TSR_list]
-
-rotor_yaw = 0.0
-glauert_correction = True
-prandtl_correction = True
-
-# Air density
-rho = 1.225
+U0 = 10
+TSR = [6, 8, 10]
+rotor_yaw = 0
+Omega = [TSR[i] * U0 / Radius for i in range(len(TSR))]
 
 
 # --------- Module 1 : Lift and Drag Coefficients ---------
 
-airfoil = "polar DU95W180.xlsx"
-data = pd.read_excel(
-    airfoil,
-    header=0,
-    names=["alpha", "cl", "cd", "cm"]
-).dropna()
+def load_polar():
+    possible_files = [
+        "polar DU95W180.xlsx",
+        "polar DU95W180 (3).xlsx",
+        "/mnt/data/polar DU95W180.xlsx",
+        "/mnt/data/polar DU95W180 (3).xlsx"
+    ]
 
-data = data.drop(data.index[0])
+    airfoil_file = None
+    for f in possible_files:
+        if os.path.exists(f):
+            airfoil_file = f
+            break
 
-polar_alpha = data["alpha"].astype(float).to_numpy()
-polar_cl = data["cl"].astype(float).to_numpy()
-polar_cd = data["cd"].astype(float).to_numpy()
+    if airfoil_file is None:
+        matches = glob.glob("*DU95W180*.xlsx") + glob.glob("/mnt/data/*DU95W180*.xlsx")
+        if matches:
+            airfoil_file = matches[0]
+        else:
+            raise FileNotFoundError("DU95W180 polar file not found.")
+
+    data = pd.read_excel(airfoil_file, header=0, names=["alpha", "cl", "cd", "cm"]).dropna()
+    data["alpha"] = pd.to_numeric(data["alpha"], errors="coerce")
+    data["cl"] = pd.to_numeric(data["cl"], errors="coerce")
+    data["cd"] = pd.to_numeric(data["cd"], errors="coerce")
+    data = data.dropna()
+
+    polar_alpha = data["alpha"].to_numpy(dtype=float)
+    polar_cl = data["cl"].to_numpy(dtype=float)
+    polar_cd = data["cd"].to_numpy(dtype=float)
+
+    return polar_alpha, polar_cl, polar_cd
+
+polar_alpha, polar_cl, polar_cd = load_polar()
 
 
-# --------- Module 2 : Aerodynamics ---------
+# --------- Module 2 : Normal and Tangential Forces ---------
 
 def CTfunction(a, glauert_correction=False):
-    """
-    Calculate thrust coefficient as a function of axial induction a.
-    """
-    a = np.asarray(a, dtype=float)
     CT = 4 * a * (1 - a)
-
     if glauert_correction:
         CT1 = 1.816
         a1 = 1 - np.sqrt(CT1) / 2
-        mask = a > a1
-        CT[mask] = CT1 - 4 * (np.sqrt(CT1) - 1) * (1 - a[mask])
-
+        CT = np.where(a > a1, CT1 - 4 * (np.sqrt(CT1) - 1) * (1 - a), CT)
     return CT
 
-
-def ainduction(CT):
-    """
-    Calculate axial induction factor as a function of thrust coefficient CT,
-    including Glauert correction.
-    """
+def ainduction(CT, glauert_correction=True):
     CT = np.asarray(CT, dtype=float)
-    a = np.zeros(np.shape(CT))
 
+    if not glauert_correction:
+        CT = np.clip(CT, None, 1.0)
+        return 0.5 - 0.5 * np.sqrt(1 - CT)
+
+    a = np.zeros(np.shape(CT))
     CT1 = 1.816
     CT2 = 2 * np.sqrt(CT1) - CT1
 
     mask_high = CT >= CT2
-    mask_low = ~mask_high
+    mask_low = CT < CT2
 
     a[mask_high] = 1 + (CT[mask_high] - CT1) / (4 * (np.sqrt(CT1) - 1))
-
-    inside = 1 - CT[mask_low]
-    inside = np.maximum(inside, 0.0)
-    a[mask_low] = 0.5 - 0.5 * np.sqrt(inside)
+    CT_low = np.clip(CT[mask_low], None, 1.0)
+    a[mask_low] = 0.5 - 0.5 * np.sqrt(1 - CT_low)
 
     return a
 
-
 def PrandtlTipRootCorrection(r_R, rootradius_R, tipradius_R, TSR, NBlades, axial_induction):
-    """
-    Calculate combined tip and root Prandtl correction.
-    """
-    axial_induction = np.clip(axial_induction, -0.95, 0.95)
+    denom = max(1 - axial_induction, 1e-6)
 
-    temp_tip = -NBlades / 2 * (tipradius_R - r_R) / r_R * np.sqrt(
-        1 + ((TSR * r_R) ** 2) / ((1 - axial_induction) ** 2)
-    )
+    temp_tip = -NBlades / 2 * (tipradius_R - r_R) / r_R * np.sqrt(1 + ((TSR * r_R) ** 2) / (denom ** 2))
     Ftip = np.array(2 / np.pi * np.arccos(np.exp(temp_tip)))
-    Ftip[np.isnan(Ftip)] = 0.0
+    Ftip[np.isnan(Ftip)] = 0
 
-    temp_root = NBlades / 2 * (rootradius_R - r_R) / r_R * np.sqrt(
-        1 + ((TSR * r_R) ** 2) / ((1 - axial_induction) ** 2)
-    )
+    temp_root = -NBlades / 2 * (r_R - rootradius_R) / r_R * np.sqrt(1 + ((TSR * r_R) ** 2) / (denom ** 2))
     Froot = np.array(2 / np.pi * np.arccos(np.exp(temp_root)))
-    Froot[np.isnan(Froot)] = 0.0
+    Froot[np.isnan(Froot)] = 0
 
-    F = Froot * Ftip
-    return F, Ftip, Froot
+    return Froot * Ftip, Ftip, Froot
 
+def loadBladeElement(vnorm, vtan, r_R, chord, twist, blade_pitch, polar_alpha, polar_cl, polar_cd):
+    vmag2 = vnorm**2 + vtan**2
+    inflowangle = np.arctan2(vnorm, vtan)
+    inflowangle_deg = inflowangle * 180 / np.pi
 
-def loadBladeElement(vnorm, vtan, chord, theta_deg, polar_alpha, polar_cl, polar_cd):
-    """
-    Calculate aerodynamic loads in a blade element.
+    # Correct wind-turbine angle of attack
+    alpha = inflowangle_deg - (twist + blade_pitch)
 
-    theta_deg = local blade angle = twist + pitch
-    phi_deg   = inflow angle
-    alpha_deg = theta_deg - phi_deg
-    """
-    vrel2 = vnorm**2 + vtan**2
-    phi = np.arctan2(vnorm, vtan)
-    phi_deg = np.degrees(phi)
+    cl = np.interp(alpha, polar_alpha, polar_cl)
+    cd = np.interp(alpha, polar_alpha, polar_cd)
 
-    alpha_deg = theta_deg - phi_deg
+    lift = 0.5 * vmag2 * cl * chord
+    drag = 0.5 * vmag2 * cd * chord
 
-    cl = np.interp(alpha_deg, polar_alpha, polar_cl)
-    cd = np.interp(alpha_deg, polar_alpha, polar_cd)
+    fnorm = lift * np.cos(inflowangle) + drag * np.sin(inflowangle)
+    ftan = lift * np.sin(inflowangle) - drag * np.cos(inflowangle)
+    gamma = 0.5 * np.sqrt(vmag2) * cl * chord
 
-    lift = 0.5 * rho * vrel2 * cl * chord
-    drag = 0.5 * rho * vrel2 * cd * chord
-
-    fnorm = lift * np.cos(phi) + drag * np.sin(phi)
-    ftan = lift * np.sin(phi) - drag * np.cos(phi)
-    gamma = 0.5 * np.sqrt(vrel2) * cl * chord
-
-    return {
-        "phi_rad": phi,
-        "phi_deg": phi_deg,
-        "alpha_deg": alpha_deg,
-        "cl": cl,
-        "cd": cd,
-        "fnorm": fnorm,
-        "ftan": ftan,
-        "gamma": gamma,
-        "vrel": np.sqrt(vrel2),
-    }
+    return fnorm, ftan, gamma, alpha, inflowangle_deg, cl, cd
 
 
 # --------- Module 3 : Streamtube Model ---------
 
-def solveStreamtube(
-    Uinf, r1_R, r2_R, rootradius_R, tipradius_R,
-    Omega, Radius, NBlades, chord, theta_deg,
-    polar_alpha, polar_cl, polar_cd,
-    use_prandtl=True, max_iter=500, tol=1e-5
-):
-    """
-    Solve momentum balance in one annulus and return local results.
-    """
+def solveStreamtube(Uinf, r1_R, r2_R, rootradius_R, tipradius_R, Omega, Radius, NBlades,
+                    chord, twist, polar_alpha, polar_cl, polar_cd,
+                    use_glauert=True, use_prandtl=True):
+
     Area = np.pi * ((r2_R * Radius) ** 2 - (r1_R * Radius) ** 2)
-    rmid_R = 0.5 * (r1_R + r2_R)
-    rmid = rmid_R * Radius
-    dr = (r2_R - r1_R) * Radius
+    r_R = (r1_R + r2_R) / 2
 
-    a = 0.0
+    a = 0.3
     aline = 0.0
-    history = []
+    anew = 1.0
 
-    for _ in range(max_iter):
+    iteration = 0
+    Erroriterations = 1e-5
+    max_iterations = 1000
+    iteration_history = []
+
+    while np.abs(a - anew) > Erroriterations and iteration < max_iterations:
+        iteration += 1
+
         Urotor = Uinf * (1 - a)
-        Utan = (1 + aline) * Omega * rmid
+        Utan = (1 + aline) * Omega * r_R * Radius
 
-        aero = loadBladeElement(
-            Urotor, Utan, chord, theta_deg,
-            polar_alpha, polar_cl, polar_cd
+        fnorm, ftan, gamma, alpha, phi, cl, cd = loadBladeElement(
+            Urotor, Utan, r_R, chord, twist, blade_pitch, polar_alpha, polar_cl, polar_cd
         )
 
-        dT = aero["fnorm"] * dr * NBlades
-        dQ = aero["ftan"] * rmid * dr * NBlades
+        load3Daxial = fnorm * Radius * (r2_R - r1_R) * NBlades
+        CT_annulus = load3Daxial / (0.5 * Area * Uinf**2)
 
-        CT_annulus = dT / (0.5 * rho * Uinf**2 * Area)
-        anew = ainduction(np.array([CT_annulus]))[0]
+        anew = float(np.atleast_1d(ainduction(CT_annulus, glauert_correction=use_glauert))[0])
 
-        F = 1.0
-        Ftip = 1.0
-        Froot = 1.0
-
+        Prandtl = 1.0
         if use_prandtl:
-            F, Ftip, Froot = PrandtlTipRootCorrection(
-                rmid_R, rootradius_R, tipradius_R,
-                Omega * Radius / Uinf, NBlades, anew
+            Prandtl, Prandtltip, Prandtlroot = PrandtlTipRootCorrection(
+                r_R, rootradius_R, tipradius_R, Omega * Radius / Uinf, NBlades, anew
             )
-            F = max(F, 1e-4)
-            anew = anew / F
+            if Prandtl < 1e-4:
+                Prandtl = 1e-4
+            anew = anew / Prandtl
 
-        a_next = 0.75 * a + 0.25 * anew
+        a = 0.75 * a + 0.25 * anew
 
-        denom = 2 * np.pi * rho * Uinf * (1 - a_next) * Omega * 2 * rmid**2
-        aline_new = aero["ftan"] * NBlades / denom
+        aline_new = ftan * NBlades / (4 * np.pi * Uinf * (1 - a) * Omega * (r_R * Radius) ** 2)
 
         if use_prandtl:
-            aline_new = aline_new / F
+            aline_new = aline_new / Prandtl
 
-        history.append(a_next)
+        aline = 0.75 * aline + 0.25 * aline_new
 
-        if abs(a_next - a) < tol:
-            a = a_next
-            aline = aline_new
-            break
+        a = np.clip(a, -0.2, 0.95)
+        aline = np.clip(aline, -1.0, 1.0)
 
-        a = a_next
-        aline = aline_new
+        iteration_history.append(a)
 
-    Cn_local = aero["fnorm"] / (0.5 * rho * Uinf**2 * chord)
-    Ct_local = aero["ftan"] / (0.5 * rho * Uinf**2 * chord)
-    Cq_local = Ct_local * rmid_R
-
-    return {
-        "r_R": rmid_R,
-        "r": rmid,
-        "dr": dr,
-        "a": a,
-        "aline": aline,
-        "phi_deg": aero["phi_deg"],
-        "alpha_deg": aero["alpha_deg"],
-        "cl": aero["cl"],
-        "cd": aero["cd"],
-        "fnorm": aero["fnorm"],
-        "ftan": aero["ftan"],
-        "gamma": aero["gamma"],
-        "Cn": Cn_local,
-        "Ct": Ct_local,
-        "Cq": Cq_local,
-        "F": F,
-        "Ftip": Ftip,
-        "Froot": Froot,
-        "iterations": len(history),
-        "a_history": history,
-        "dT": dT,
-        "dQ": dQ,
-        "chord": chord,
-        "theta_deg": theta_deg,
-    }
+    return [a, aline, r_R, fnorm, ftan, gamma, alpha, phi, cl, cd, iteration_history]
 
 
-# --------- Module 4 : BEM Executor ---------
+# --------- Module 4 : BEM executor ---------
 
-def executeBEM(
-    Uinf, TSR, RootLocation_R, TipLocation_R, Omega, Radius, NBlades,
-    chord_distribution, twist_distribution,
-    polar_alpha, polar_cl, polar_cd,
-    use_prandtl=True
-):
-    rows = []
+def executeBEM(Uinf, TSR, RootLocation_R, TipLocation_R, Omega, Radius, NBlades,
+               chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd,
+               use_glauert=True, use_prandtl=True):
+
+    # columns:
+    # 0 a, 1 aline, 2 r/R, 3 fnorm, 4 ftan, 5 gamma, 6 alpha, 7 phi, 8 cl, 9 cd, 10 Ct_local, 11 Cn_local, 12 Cq_local
+    results = np.zeros([len(r_R) - 1, 13])
+    iteration_lengths = []
 
     for i in range(len(r_R) - 1):
-        rmid_R = 0.5 * (r_R[i] + r_R[i + 1])
+        r_mid = 0.5 * (r_R[i] + r_R[i + 1])
+        chord = np.interp(r_mid, r_R, chord_distribution)
+        twist = np.interp(r_mid, r_R, twist_distribution)
 
-        chord = np.interp(rmid_R, r_R, chord_distribution)
-        theta_deg = np.interp(rmid_R, r_R, twist_distribution)
-
-        row = solveStreamtube(
+        out = solveStreamtube(
             Uinf, r_R[i], r_R[i + 1], RootLocation_R, TipLocation_R,
-            Omega, Radius, NBlades, chord, theta_deg,
-            polar_alpha, polar_cl, polar_cd,
-            use_prandtl=use_prandtl
+            Omega, Radius, NBlades, chord, twist, polar_alpha, polar_cl, polar_cd,
+            use_glauert=use_glauert, use_prandtl=use_prandtl
         )
-        rows.append(row)
 
-    df = pd.DataFrame(rows)
+        a_i, aline_i, r_i, fnorm, ftan, gamma, alpha, phi, cl, cd, hist = out
+        iteration_lengths.append(len(hist))
 
-    rotor_area = np.pi * Radius**2
-    T_total = df["dT"].sum()
-    Q_total = df["dQ"].sum()
-    P_total = Q_total * Omega
+        Ct_local = fnorm / (0.5 * Uinf**2 * Radius)
+        Cq_local = ftan / (0.5 * Uinf**2 * Radius)
+        Cn_local = fnorm / (0.5 * Uinf**2 * np.interp(r_i, r_R, chord_distribution))
 
-    CT = T_total / (0.5 * rho * Uinf**2 * rotor_area)
-    CP = P_total / (0.5 * rho * Uinf**3 * rotor_area)
+        results[i, :] = [a_i, aline_i, r_i, fnorm, ftan, gamma, alpha, phi, cl, cd, Ct_local, Cn_local, Cq_local]
 
-    return {
-        "TSR": TSR,
-        "Omega": Omega,
-        "T_total": T_total,
-        "Q_total": Q_total,
-        "P_total": P_total,
-        "CT": CT,
-        "CP": CP,
-        "df": df,
-    }
+    dr = (r_R[1:] - r_R[:-1]) * Radius
+    CT = np.sum(dr * results[:, 3] * blades / (0.5 * Uinf**2 * np.pi * Radius**2))
+    CP = np.sum(dr * results[:, 4] * results[:, 2] * blades * Radius * Omega / (0.5 * Uinf**3 * np.pi * Radius**2))
+
+    rho = 1.225
+    Thrust = 0.5 * rho * Uinf**2 * np.pi * Radius**2 * CT
+    Power = 0.5 * rho * Uinf**3 * np.pi * Radius**2 * CP
+    Torque = Power / Omega
+
+    return CT, CP, results, Thrust, Torque, iteration_lengths
 
 
-# --------- Module 5 : Visualiser ---------
+# --------- Module 5 : Plotting ---------
 
-def plot_prandtl_factor(result, tsr):
-    df = result["df"]
+def plot_spanwise_baseline_for_tsr(tsr_value, results, use_prandtl, use_glauert):
+    label = f"TSR = {tsr_value}, Prandtl={use_prandtl}, Glauert={use_glauert}"
 
-    plt.figure(figsize=(10, 6))
-    plt.plot(df["r_R"], df["F"], label="Combined F")
-    plt.plot(df["r_R"], df["Ftip"], label="Tip factor")
-    plt.plot(df["r_R"], df["Froot"], label="Root factor")
-    plt.xlabel("r/R")
-    plt.ylabel("Prandtl factor [-]")
-    plt.title(f"Prandtl correction factors at TSR = {tsr}")
+    # alpha and inflow
+    plt.figure(figsize=(12, 6))
+    plt.title("Spanwise distribution of angle of attack and inflow angle\n" + label)
+    plt.plot(results[:, 2], results[:, 6], 'b-', label='Angle of attack α [deg]')
+    plt.plot(results[:, 2], results[:, 7], 'r--', label='Inflow angle φ [deg]')
+    plt.xlabel('r/R')
+    plt.ylabel('Angle [deg]')
     plt.grid()
     plt.legend()
-    plt.tight_layout()
+    plt.show()
+
+    # a and a'
+    plt.figure(figsize=(12, 6))
+    plt.title("Spanwise distribution of axial and azimuthal induction\n" + label)
+    plt.plot(results[:, 2], results[:, 0], 'r-', label='a')
+    plt.plot(results[:, 2], results[:, 1], 'g--', label="a'")
+    plt.xlabel('r/R')
+    plt.ylabel('Induction factor [-]')
+    plt.grid()
+    plt.legend()
+    plt.show()
+
+    # dimensional loads
+    plt.figure(figsize=(12, 6))
+    plt.title("Spanwise distribution of thrust and azimuthal loading\n" + label)
+    plt.plot(results[:, 2], results[:, 3], 'b-', label='Normal load [N/m]')
+    plt.plot(results[:, 2], results[:, 4], 'r--', label='Tangential load [N/m]')
+    plt.xlabel('r/R')
+    plt.ylabel('Load [N/m]')
+    plt.grid()
+    plt.legend()
+    plt.show()
+
+    # Ct / Cn / Cq
+    plt.figure(figsize=(12, 6))
+    plt.title("Spanwise distribution of Ct, Cn and Cq\n" + label)
+    plt.plot(results[:, 2], results[:, 10], 'b-', label='Ct')
+    plt.plot(results[:, 2], results[:, 11], 'g--', label='Cn')
+    plt.plot(results[:, 2], results[:, 12], 'r-.', label='Cq')
+    plt.xlabel('r/R')
+    plt.ylabel('Coefficient [-]')
+    plt.grid()
+    plt.legend()
     plt.show()
 
 
-def plot_spanwise_comparison(result_with, result_without, tsr):
-    df_w = result_with["df"]
-    df_wo = result_without["df"]
+def plot_tip_correction_comparison_for_tsr(tsr_value, results_with, results_without):
+    # alpha / inflow
+    plt.figure(figsize=(12, 6))
+    plt.title(f"Influence of corrections on α and φ, TSR = {tsr_value}")
+    plt.plot(results_with[:, 2], results_with[:, 6], 'b-', label='α with corrections')
+    plt.plot(results_without[:, 2], results_without[:, 6], 'b--', label='α without corrections')
+    plt.plot(results_with[:, 2], results_with[:, 7], 'r-', label='φ with corrections')
+    plt.plot(results_without[:, 2], results_without[:, 7], 'r--', label='φ without corrections')
+    plt.xlabel('r/R')
+    plt.ylabel('Angle [deg]')
+    plt.grid()
+    plt.legend()
+    plt.show()
 
-    fig, axs = plt.subplots(2, 2, figsize=(15, 9))
+    # a / a'
+    plt.figure(figsize=(12, 6))
+    plt.title(f"Influence of corrections on a and a', TSR = {tsr_value}")
+    plt.plot(results_with[:, 2], results_with[:, 0], 'b-', label='a with corrections')
+    plt.plot(results_without[:, 2], results_without[:, 0], 'b--', label='a without corrections')
+    plt.plot(results_with[:, 2], results_with[:, 1], 'r-', label="a' with corrections")
+    plt.plot(results_without[:, 2], results_without[:, 1], 'r--', label="a' without corrections")
+    plt.xlabel('r/R')
+    plt.ylabel('Induction factor [-]')
+    plt.grid()
+    plt.legend()
+    plt.show()
 
-    axs[0, 0].plot(df_w["r_R"], df_w["alpha_deg"], label="with tip correction")
-    axs[0, 0].plot(df_wo["r_R"], df_wo["alpha_deg"], "--", label="without tip correction")
-    axs[0, 0].set_xlabel("r/R")
-    axs[0, 0].set_ylabel("alpha [deg]")
-    axs[0, 0].grid()
-    axs[0, 0].legend()
+    # loads
+    plt.figure(figsize=(12, 6))
+    plt.title(f"Influence of corrections on spanwise loading, TSR = {tsr_value}")
+    plt.plot(results_with[:, 2], results_with[:, 3], 'b-', label='Fn with corrections')
+    plt.plot(results_without[:, 2], results_without[:, 3], 'b--', label='Fn without corrections')
+    plt.plot(results_with[:, 2], results_with[:, 4], 'r-', label='Ft with corrections')
+    plt.plot(results_without[:, 2], results_without[:, 4], 'r--', label='Ft without corrections')
+    plt.xlabel('r/R')
+    plt.ylabel('Load [N/m]')
+    plt.grid()
+    plt.legend()
+    plt.show()
 
-    axs[0, 1].plot(df_w["r_R"], df_w["a"], label="with tip correction")
-    axs[0, 1].plot(df_wo["r_R"], df_wo["a"], "--", label="without tip correction")
-    axs[0, 1].set_xlabel("r/R")
-    axs[0, 1].set_ylabel("a [-]")
-    axs[0, 1].grid()
-    axs[0, 1].legend()
-
-    axs[1, 0].plot(df_w["r_R"], df_w["fnorm"], label="with tip correction")
-    axs[1, 0].plot(df_wo["r_R"], df_wo["fnorm"], "--", label="without tip correction")
-    axs[1, 0].set_xlabel("r/R")
-    axs[1, 0].set_ylabel("normal load [N/m]")
-    axs[1, 0].grid()
-    axs[1, 0].legend()
-
-    axs[1, 1].plot(df_w["r_R"], df_w["ftan"], label="with tip correction")
-    axs[1, 1].plot(df_wo["r_R"], df_wo["ftan"], "--", label="without tip correction")
-    axs[1, 1].set_xlabel("r/R")
-    axs[1, 1].set_ylabel("tangential load [N/m]")
-    axs[1, 1].grid()
-    axs[1, 1].legend()
-
-    fig.suptitle(f"Influence of tip/root correction at TSR = {tsr}")
-    plt.tight_layout()
+    # Ct / Cn / Cq
+    plt.figure(figsize=(12, 6))
+    plt.title(f"Influence of corrections on Ct, Cn and Cq, TSR = {tsr_value}")
+    plt.plot(results_with[:, 2], results_with[:, 10], 'b-', label='Ct with corrections')
+    plt.plot(results_without[:, 2], results_without[:, 10], 'b--', label='Ct without corrections')
+    plt.plot(results_with[:, 2], results_with[:, 11], 'g-', label='Cn with corrections')
+    plt.plot(results_without[:, 2], results_without[:, 11], 'g--', label='Cn without corrections')
+    plt.plot(results_with[:, 2], results_with[:, 12], 'r-', label='Cq with corrections')
+    plt.plot(results_without[:, 2], results_without[:, 12], 'r--', label='Cq without corrections')
+    plt.xlabel('r/R')
+    plt.ylabel('Coefficient [-]')
+    plt.grid()
+    plt.legend()
     plt.show()
 
 
-def plot_total_performance(results_with, results_without):
-    tsr_vals = [res["TSR"] for res in results_with]
-    ct_with = [res["CT"] for res in results_with]
-    cp_with = [res["CP"] for res in results_with]
-    ct_without = [res["CT"] for res in results_without]
-    cp_without = [res["CP"] for res in results_without]
+def compare_corrections():
+    CT_with = np.zeros(len(TSR))
+    CP_with = np.zeros(len(TSR))
+    Thrust_with = np.zeros(len(TSR))
+    Torque_with = np.zeros(len(TSR))
 
-    fig, axs = plt.subplots(1, 2, figsize=(15, 6))
+    CT_without = np.zeros(len(TSR))
+    CP_without = np.zeros(len(TSR))
+    Thrust_without = np.zeros(len(TSR))
+    Torque_without = np.zeros(len(TSR))
 
-    axs[0].plot(tsr_vals, ct_with, "o-", label="with tip correction")
-    axs[0].plot(tsr_vals, ct_without, "s--", label="without tip correction")
-    axs[0].set_xlabel("TSR")
-    axs[0].set_ylabel("CT")
-    axs[0].grid()
-    axs[0].legend()
+    all_results_with = []
+    all_results_without = []
 
-    axs[1].plot(tsr_vals, cp_with, "o-", label="with tip correction")
-    axs[1].plot(tsr_vals, cp_without, "s--", label="without tip correction")
-    axs[1].set_xlabel("TSR")
-    axs[1].set_ylabel("CP")
-    axs[1].grid()
-    axs[1].legend()
+    for j in range(len(TSR)):
+        # WITH corrections
+        CT, CP, results_with, Thrust, Torque, iter_len_with = executeBEM(
+            U0, TSR[j], RootLocation_R, TipLocation_R, Omega[j], Radius, blades,
+            chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd,
+            use_glauert=True, use_prandtl=True
+        )
 
-    plt.tight_layout()
+        CT_with[j] = CT
+        CP_with[j] = CP
+        Thrust_with[j] = Thrust
+        Torque_with[j] = Torque
+        all_results_with.append(results_with)
+
+        # WITHOUT corrections
+        CT, CP, results_without, Thrust, Torque, iter_len_without = executeBEM(
+            U0, TSR[j], RootLocation_R, TipLocation_R, Omega[j], Radius, blades,
+            chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd,
+            use_glauert=False, use_prandtl=False
+        )
+
+        CT_without[j] = CT
+        CP_without[j] = CP
+        Thrust_without[j] = Thrust
+        Torque_without[j] = Torque
+        all_results_without.append(results_without)
+
+        print(f"\nTSR = {TSR[j]}")
+        print(f"With corrections    : CT = {CT_with[j]:.4f}, CP = {CP_with[j]:.4f}, Thrust = {Thrust_with[j]:.2f} N, Torque = {Torque_with[j]:.2f} Nm")
+        print(f"Without corrections : CT = {CT_without[j]:.4f}, CP = {CP_without[j]:.4f}, Thrust = {Thrust_without[j]:.2f} N, Torque = {Torque_without[j]:.2f} Nm")
+
+        # Baseline plots for this TSR
+        plot_spanwise_baseline_for_tsr(TSR[j], results_with, use_prandtl=True, use_glauert=True)
+
+        # Comparison plots for this TSR
+        plot_tip_correction_comparison_for_tsr(TSR[j], results_with, results_without)
+
+    # Summary plot: total thrust and torque versus TSR
+    plt.figure(figsize=(12, 6))
+    plt.title("Total thrust and torque versus TSR")
+    plt.plot(TSR, Thrust_with, 'bo-', label='Thrust with corrections')
+    plt.plot(TSR, Thrust_without, 'bs--', label='Thrust without corrections')
+    plt.plot(TSR, Torque_with, 'ro-', label='Torque with corrections')
+    plt.plot(TSR, Torque_without, 'rs--', label='Torque without corrections')
+    plt.xlabel('Tip speed ratio λ')
+    plt.ylabel('Load')
+    plt.grid()
+    plt.legend()
     plt.show()
 
+    # Summary plot: CT and CP versus TSR
+    plt.figure(figsize=(12, 6))
+    plt.title("CT and CP versus TSR")
+    plt.plot(TSR, CT_with, 'bo-', label='CT with corrections')
+    plt.plot(TSR, CT_without, 'bs--', label='CT without corrections')
+    plt.plot(TSR, CP_with, 'ro-', label='CP with corrections')
+    plt.plot(TSR, CP_without, 'rs--', label='CP without corrections')
+    plt.xlabel('Tip speed ratio λ')
+    plt.ylabel('Coefficient [-]')
+    plt.grid()
+    plt.legend()
+    plt.show()
 
-# --------- Module 6 : Main ---------
 
 def main():
-    results_with = []
-    results_without = []
-
-    for tsr, omega in zip(TSR_list, Omega_list):
-        print(f"Executing BEM for TSR = {tsr}")
-
-        res_with = executeBEM(
-            U0, tsr, RootLocation_R, TipLocation_R, omega, Radius, blades,
-            chord_distribution, twist_distribution,
-            polar_alpha, polar_cl, polar_cd,
-            use_prandtl=True
-        )
-
-        res_without = executeBEM(
-            U0, tsr, RootLocation_R, TipLocation_R, omega, Radius, blades,
-            chord_distribution, twist_distribution,
-            polar_alpha, polar_cl, polar_cd,
-            use_prandtl=False
-        )
-
-        results_with.append(res_with)
-        results_without.append(res_without)
-
-        print(f"TSR = {tsr}")
-        print(f"  WITH Prandtl:    CT = {res_with['CT']:.4f}, CP = {res_with['CP']:.4f}")
-        print(f"  WITHOUT Prandtl: CT = {res_without['CT']:.4f}, CP = {res_without['CP']:.4f}")
-
-        plot_prandtl_factor(res_with, tsr)
-        plot_spanwise_comparison(res_with, res_without, tsr)
-
-    plot_total_performance(results_with, results_without)
-
+    compare_corrections()
 
 if __name__ == "__main__":
     main()
