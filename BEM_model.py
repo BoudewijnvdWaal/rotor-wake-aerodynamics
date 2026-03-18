@@ -41,9 +41,6 @@ Omega = [TSR[i]*U0/Radius for i in range(len(TSR))] # rotational velocity of the
 glauert_correction = True # whether to apply Glauert's correction for heavily loaded rotors
 prandtl_correction = True # whether to apply Prandtl's tip loss correction
 
-    
-
-
 # --------- Module 1 : Lift and Drag Coefficients ---------
 
 # BLOCK 1.1 : Import airfoil data and polar
@@ -139,12 +136,12 @@ def solveStreamtube(Uinf, r1_R, r2_R, rootradius_R, tipradius_R , Omega, Radius,
     # initiatlize variables
     a = 0.0 # axial induction
     aline = 0.0 # tangential induction factor
-    anew = 1.0 # new estimate of axial induction, for iteration process
+    anew = 0.3 # new estimate of axial induction, for iteration process
     
     iteration = 0
-    Erroriterations = 0.00001 # error limit for iteration process, in absolute value of induction
+    Erroriterations = 0.000001 # error limit for iteration process, in absolute value of induction
 
-    while np.abs(a-anew) > Erroriterations:
+    while abs(anew-a) > Erroriterations:
         iteration += 1
         # calculate velocity and loads at blade element
         Urotor = Uinf*(1-a) # axial velocity at rotor
@@ -161,7 +158,7 @@ def solveStreamtube(Uinf, r1_R, r2_R, rootradius_R, tipradius_R , Omega, Radius,
         anew =  ainduction(CT)
         
         # correct new axial induction with Prandtl's correction
-        Prandtl, Prandtltip, Prandtlroot = PrandtlTipRootCorrection(r_R, rootradius_R, tipradius_R, Omega*Radius/Uinf, NBlades, anew);
+        Prandtl, Prandtltip, Prandtlroot = PrandtlTipRootCorrection(r_R, rootradius_R, tipradius_R, Omega*Radius/Uinf, NBlades, anew)
         if (Prandtl < 0.0001): 
             Prandtl = 0.0001 # avoid divide by zero
         anew = anew/Prandtl # correct estimate of axial induction
@@ -170,6 +167,10 @@ def solveStreamtube(Uinf, r1_R, r2_R, rootradius_R, tipradius_R , Omega, Radius,
         # calculate aximuthal induction
         aline = ftan*NBlades/(2*np.pi*Uinf*(1-a)*Omega*2*(r_R*Radius)**2)
         aline =aline/Prandtl # correct estimate of azimuthal induction with Prandtl's correction
+
+        if iteration > 5000:
+            print("Warning: iteration process did not converge after 5000 iterations, with error limit of ", Erroriterations)
+            break
 
     return [a, aline, r_R, fnorm, ftan, gamma, alpha, phi]
 
@@ -269,13 +270,14 @@ plt.show()
 """
 
 def influence_annuli():
-    elements = [5,10,20,50,100,200] # number of annuli to divide blade into, for convergence analysis
+    elements = [5, 10, 20, 50, 100, 200, 500, 1000] # number of annuli to divide blade into, for convergence analysis
     CTlist = np.zeros(len(elements))
     CPlist = np.zeros(len(elements))
-    
+    TSR = 10 # For convergence analysis, change if necessary
+
     for i in range(len(elements)):
         r_R, chord_distribution, twist_distribution, a, aline = initialise(elements[i]) # initialize blade element positions and distributions for given number of blade elements
-        CT, CP, results, Thrust, Torque, J = executeBEM(U0, TSR[0], RootLocation_R, TipLocation_R,
+        CT, CP, results, Thrust, Torque, J = executeBEM(U0, TSR, RootLocation_R, TipLocation_R,
             Omega[0], Radius, blades, r_R, chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd)
 
         CTlist[i] = CT
@@ -283,12 +285,21 @@ def influence_annuli():
 
     plt.figure(figsize=(12,6))
     plt.plot(elements, CTlist, 'bo-', label='Thrust coefficient')
+    plt.xlabel('Number of annuli')
+    plt.ylabel('Coefficient')
+    plt.title('Convergence of BEM Results')
+    plt.grid()
+    plt.legend()
+
+    plt.figure(figsize=(12,6))
     plt.plot(elements, CPlist, 'ro-', label='Power coefficient')
     plt.xlabel('Number of annuli')
     plt.ylabel('Coefficient')
     plt.title('Convergence of BEM Results')
     plt.grid()
     plt.legend()
+
+    plt.show()
 
     return CTlist, CPlist
 
