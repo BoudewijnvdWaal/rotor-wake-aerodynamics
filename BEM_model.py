@@ -112,7 +112,8 @@ def loadBladeElement(vnorm, vtan, r_R, chord, twist, polar_alpha, polar_cl, pola
     """
     vmag2 = vnorm**2 + vtan**2
     inflowangle = np.arctan2(vnorm,vtan)
-    alpha = twist + inflowangle*180/np.pi
+    inflowangle_deg = inflowangle * 180/np.pi
+    alpha = twist + inflowangle_deg
     cl = np.interp(alpha, polar_alpha, polar_cl)
     cd = np.interp(alpha, polar_alpha, polar_cd)
     lift = 0.5*vmag2*cl*chord
@@ -120,7 +121,8 @@ def loadBladeElement(vnorm, vtan, r_R, chord, twist, polar_alpha, polar_cl, pola
     fnorm = lift*np.cos(inflowangle)+drag*np.sin(inflowangle)
     ftan = lift*np.sin(inflowangle)-drag*np.cos(inflowangle)
     gamma = 0.5*np.sqrt(vmag2)*cl*chord
-    return fnorm , ftan, gamma
+
+    return fnorm , ftan, gamma, alpha, inflowangle_deg
 
 
 # --------- Module 3 : Streamtube Model ---------
@@ -153,7 +155,7 @@ def solveStreamtube(Uinf, r1_R, r2_R, rootradius_R, tipradius_R , Omega, Radius,
         Urotor = Uinf*(1-a) # axial velocity at rotor
         Utan = (1+aline)*Omega*r_R*Radius # tangential velocity at rotor
         # calculate loads in blade segment in 2D (N/m)
-        fnorm, ftan, gamma = loadBladeElement(Urotor, Utan, r_R, chord, twist, polar_alpha, polar_cl, polar_cd)
+        fnorm, ftan, gamma, alpha, phi = loadBladeElement(Urotor, Utan, r_R, chord, twist, polar_alpha, polar_cl, polar_cd)
         load3Daxial =fnorm*Radius*(r2_R-r1_R)*NBlades # 3D force in axial direction
         load3Dtan =ftan*Radius*(r2_R-r1_R)*NBlades # 3D force in azimuthal/tangential direction (not used here)
       
@@ -174,13 +176,13 @@ def solveStreamtube(Uinf, r1_R, r2_R, rootradius_R, tipradius_R , Omega, Radius,
         aline = ftan*NBlades/(2*np.pi*Uinf*(1-a)*Omega*2*(r_R*Radius)**2)
         aline =aline/Prandtl # correct estimate of azimuthal induction with Prandtl's correction
 
-    return [a , aline, r_R, fnorm , ftan, gamma]
+    return [a, aline, r_R, fnorm, ftan, gamma, alpha, phi]
 
 # --------- Module 4 : BEM executor ---------
 
 # BLOCK 4.1 : Execute BEM solver for a given set of input parameters, and return the distribution of axial induction, tangential induction, loads and circulation along the blade
 def executeBEM(Uinf, TSR, RootLocation_R, TipLocation_R , Omega, Radius, NBlades, chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd):
-    results = np.zeros([len(r_R)-1, 6])
+    results = np.zeros([len(r_R)-1, 8])
 
     for i in range(len(r_R)-1):
         chord = np.interp((r_R[i]+r_R[i+1])/2, r_R, chord_distribution)
@@ -195,7 +197,52 @@ def executeBEM(Uinf, TSR, RootLocation_R, TipLocation_R , Omega, Radius, NBlades
     print("CT is ", CT)
     print("CP is ", CP)
 
-    return CT, CP, results
+    fig1 = plt.figure(figsize=(12,6))
+    plt.title('Spanwise distribution of angles')
+    plt.plot(results[:,2], results[:,6], 'b-', label='Angle of attack (deg)')
+    plt.plot(results[:,2], results[:,7], 'r--', label='Inflow angle (deg)')
+    plt.xlabel('r/R')
+    plt.ylabel('Angle (deg)')
+    plt.grid()
+    plt.legend()
+    plt.show()
+
+    fig2 = plt.figure(figsize=(12, 6))
+    plt.title('Axial and tangential induction')
+    plt.plot(results[:,2], results[:,0], 'r-', label=r'$a$')
+    plt.plot(results[:,2], results[:,1], 'g--', label=r'$a^,$')
+    plt.grid()
+    plt.xlabel('r/R')
+    plt.legend()
+    plt.show()
+
+    fig3 = plt.figure(figsize=(12, 6))
+    plt.title(r'Normal and tagential force, non-dimensioned by $\frac{1}{2} \rho U_\infty^2 R$')
+    plt.plot(results[:,2], results[:,3]/(0.5*Uinf**2*Radius), 'r-', label=r'Fnorm')
+    plt.plot(results[:,2], results[:,4]/(0.5*Uinf**2*Radius), 'g--', label=r'Ftan')
+    plt.grid()
+    plt.xlabel('r/R')
+    plt.legend()
+    plt.show()
+
+    n = Omega/(2*np.pi)
+    D = 2*Radius
+    J = Uinf/(n*D)
+
+    print("Advance ratio J =", J)
+
+    rho = 1.225
+    Thrust = 0.5 * rho * Uinf**2 * np.pi * Radius**2 * CT
+    print("Total thrust =", Thrust, "N")
+
+    Power = 0.5 * rho * Uinf**3 * np.pi * Radius**2 * CP
+    Torque = Power / Omega
+
+    print("Power =", Power, "W")
+    print("Torque =", Torque, "Nm")
+    
+
+    return CT, CP, results, Thrust, Torque, J
 
 
 # --------- Module 5 : Visualiser ---------
@@ -226,19 +273,38 @@ axs[1].grid()
 plt.show()
 """
 
+
 def main():
     iter_history = np.array([]) # for storing history of iteration process, for visualisation purposes
     #elements = [5,10,20,50,100,200] # number of annuli to divide blade into, for convergence analysis
     CTlist = np.zeros(len(TSR))
     CPlist = np.zeros(len(TSR))
+    Thrust_list = np.zeros(len(TSR))
+    Torque_list = np.zeros(len(TSR))
+    J_list = np.zeros(len(TSR))
 
     for j in range(len(TSR)):
-        print("Executing BEM for TSR = ", TSR[j])
-        CT, CP, results = executeBEM(U0, TSR[j], RootLocation_R, TipLocation_R , Omega[j], Radius, blades, chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd)
+        CT, CP, results, Thrust, Torque, J = executeBEM(U0, TSR[j], RootLocation_R, TipLocation_R,
+        Omega[j], Radius, blades,chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd)
+
         CTlist[j] = CT
         CPlist[j] = CP
+        Thrust_list[j] = Thrust
+        Torque_list[j] = Torque
+        J_list[j] = J
+        
 
-    iter_history = np.append(iter_history, [CTlist, CPlist])
+    iter_history = np.append(iter_history, [CTlist, CPlist]) 
+
+    plt.figure(figsize=(12,6))
+    plt.plot(TSR/J_list, Thrust_list, 'bo-', label='Total Thrust')
+    plt.plot(TSR/J_list, Torque_list, 'rs--', label='Total Torque')
+    plt.xlabel('Advance Ratio J')
+    plt.ylabel('Load')
+    plt.title('Rotor loads vs Advance Ratio')
+    plt.grid()
+    plt.legend()
+    plt.show()
 
 if __name__ == "__main__":
     main()
