@@ -353,8 +353,6 @@ def influence_annuli():
         plt.show()
 
 
-
-
 def main():
     iter_history = np.array([]) 
     CTlist = np.zeros(len(TSR))

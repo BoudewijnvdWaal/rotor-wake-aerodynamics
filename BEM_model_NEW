@@ -1,0 +1,146 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# =============================================================================
+# MODULE 0: CONFIGURATION & GEOMETRY
+# =============================================================================
+TURBINE_CONFIG = {
+    'Radius': 50, 'Blades': 3, 'Root_R': 0.2, 'Tip_R': 1.0,
+    'Pitch': -2, 'U0': 10, 'TSR': [6, 8, 10],
+    'Airfoil': 'polar DU95W180.xlsx', 'Rho': 1.225
+}
+
+def generate_spacing(N, root_r, tip_r, method='constant'):
+    """Generates non-dimensional radial nodes r/R."""
+    if method == 'constant':
+        return np.linspace(root_r, tip_r, N + 1)
+    elif method == 'cosine':
+        phi = np.linspace(0, np.pi, N + 1)
+        nodes = 0.5 * (1 - np.cos(phi))
+        return root_r + (tip_r - root_r) * nodes
+
+def get_blade_geometry(r_R):
+    """Calculates chord and twist based on baseline specs[cite: 14]."""
+    chord = 3 * (1 - r_R) + 1  # (3*(1-r/R)+1) m [cite: 14]
+    twist = 14 * (1 - r_R)     # 14*(1-r/R) deg [cite: 14]
+    return chord, twist
+
+# =============================================================================
+# MODULE 1: AERODYNAMIC KERNELS (Glauert & Prandtl )
+# =============================================================================
+def load_polar_data(filename):
+    data = pd.read_excel(filename, header=0, names=["alpha", "cl", "cd", "cm"]).dropna()
+    data = data.drop(data.index[0])
+    return data['alpha'].astype(float), data['cl'].astype(float), data['cd'].astype(float)
+
+def ainduction(CT):
+    """BEM induction with Glauert correction for heavy loading."""
+    a = np.zeros(np.shape(CT))
+    CT1, CT2 = 1.816, 2*np.sqrt(1.816)-1.816
+    mask = CT >= CT2
+    a[mask] = 1 + (CT[mask]-CT1)/(4*(np.sqrt(CT1)-1))
+    a[~mask] = 0.5-0.5*np.sqrt(1-CT[~mask])
+    return a
+
+def prandtl_correction(r_R, root_r, tip_r, tsr, blades, a):
+    """Prandtl tip and root loss factor."""
+    def tip_fact(rad, limit, sign):
+        # Prevent division by zero if a=1
+        denom = np.maximum(abs(1-a), 0.001)
+        temp = sign * blades/2 * (limit-rad)/rad * np.sqrt(1 + ((tsr*rad)**2)/(denom**2))
+        return 2/np.pi * np.arccos(np.clip(np.exp(temp), 0, 1))
+    f_total = np.nan_to_num(tip_fact(r_R, tip_r, -1) * tip_fact(r_R, root_r, 1), nan=0.001)
+    return np.maximum(f_total, 0.05)
+
+# =============================================================================
+# MODULE 2: SOLVERS
+# =============================================================================
+def solve_streamtube(u_inf, r1, r2, config, omega, polar):
+    r_mid = (r1 + r2) / 2
+    chord, twist = get_blade_geometry(r_mid)
+    area = np.pi * ((r2*config['Radius'])**2 - (r1*config['Radius'])**2)
+    
+    a, a_prime, a_new, iter_count = 0.3, 0.0, 0.0, 0
+    a_history = []
+    
+    while abs(a_new - a) > 0.0001 and iter_count < 500:
+        iter_count += 1
+        u_rot, u_tan = u_inf*(1-a), (1+a_prime)*omega*r_mid*config['Radius']
+        
+        # Load calculation
+        v_mag2 = u_rot**2 + u_tan**2
+        phi = np.arctan2(u_rot, u_tan)
+        alpha = twist + np.degrees(phi)
+        cl, cd = np.interp(alpha, polar[0], polar[1]), np.interp(alpha, polar[0], polar[2])
+        f_n = (0.5*v_mag2*cl*chord)*np.cos(phi) + (0.5*v_mag2*cd*chord)*np.sin(phi)
+        f_t = (0.5*v_mag2*cl*chord)*np.sin(phi) - (0.5*v_mag2*cd*chord)*np.cos(phi)
+        
+        ct_loc = (f_n * config['Radius'] * (r2-r1) * config['Blades']) / (0.5 * area * u_inf**2)
+        f_p = prandtl_correction(r_mid, config['Root_R'], config['Tip_R'], omega*config['Radius']/u_inf, config['Blades'], a)
+        
+        a_new = np.clip(ainduction(ct_loc) / f_p, 0, 0.95)
+        a = 0.85*a + 0.15*a_new # Relaxation for stability
+        a_history.append(a)
+        a_prime = (f_t * config['Blades']) / (2*np.pi * u_inf * (1-a) * omega * 2 * (r_mid*config['Radius'])**2 * f_p)
+
+    return [a, a_prime, r_mid, f_n, f_t, alpha, np.degrees(phi)], a_history
+
+def execute_bem(u_inf, tsr, config, r_R, polar):
+    omega = (tsr * u_inf) / config['Radius']
+    results, histories = [], []
+    for i in range(len(r_R)-1):
+        data, hist = solve_streamtube(u_inf, r_R[i], r_R[i+1], config, omega, polar)
+        results.append(data)
+        histories.append(hist)
+    
+    res = np.array(results)
+    dr = (r_R[1:] - r_R[:-1]) * config['Radius']
+    ct = np.sum(dr * res[:,3] * config['Blades']) / (0.5 * u_inf**2 * np.pi * config['Radius']**2)
+    cp = np.sum(dr * res[:,4] * res[:,2] * config['Blades'] * config['Radius'] * omega) / (0.5 * u_inf**3 * np.pi * config['Radius']**2)
+    return ct, cp, res, histories
+
+# =============================================================================
+# MODULE 3: VISUALISATION
+# =============================================================================
+def plot_spanwise(res, title):
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+    axs[0].plot(res[:,2], res[:,5], label=r'$\alpha$'), axs[0].plot(res[:,2], res[:,6], '--', label=r'$\phi$')
+    axs[0].set_title('Angles (deg)'), axs[0].legend()
+    axs[1].plot(res[:,2], res[:,0], label='a'), axs[1].plot(res[:,2], res[:,1], label="a'")
+    axs[1].set_title('Induction Factors'), axs[1].legend()
+    axs[2].plot(res[:,2], res[:,3], label='Normal'), axs[2].plot(res[:,2], res[:,4], label='Tangential')
+    axs[2].set_title('Loads (N/m)'), axs[2].legend()
+    plt.suptitle(title), plt.show()
+
+def run_studies(cfg, polar):
+    # 1. Grid Sensitivity 
+    N_list = [10, 20, 50, 100, 200]
+    for method in ['constant', 'cosine']:
+        cps = [execute_bem(cfg['U0'], 8, cfg, generate_spacing(n, cfg['Root_R'], cfg['Tip_R'], method), polar)[1] for n in N_list]
+        plt.plot(N_list, cps, '-o', label=method)
+    plt.title('CP Convergence vs Annuli Spacing '), plt.legend(), plt.show()
+
+    # 2. Iteration History 
+    r_R = generate_spacing(100, cfg['Root_R'], cfg['Tip_R'], 'constant')
+    _, _, _, hists = execute_bem(cfg['U0'], 8, cfg, r_R, polar)
+    plt.plot(hists[-1]), plt.title('Iteration History (Tip Element) '), plt.show()
+
+# =============================================================================
+# MAIN EXECUTION
+# =============================================================================
+def main():
+    cfg = TURBINE_CONFIG
+    polar = load_polar_data(cfg['Airfoil'])
+    
+    # Run Baseline TSR cases [cite: 14, 16]
+    for tsr in cfg['TSR']:
+        r_R = generate_spacing(100, cfg['Root_R'], cfg['Tip_R'], 'constant')
+        ct, cp, res, _ = execute_bem(cfg['U0'], tsr, cfg, r_R, polar)
+        print(f"TSR: {tsr} | CT: {ct:.4f} | CP: {cp:.4f}")
+        plot_spanwise(res, f"Baseline Spanwise Results (TSR {tsr}) ")
+    
+    run_studies(cfg, polar)
+
+if __name__ == "__main__":
+    main()
