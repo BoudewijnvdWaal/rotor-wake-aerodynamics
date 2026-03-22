@@ -64,6 +64,31 @@ def save_airfoil_polars(output_dir):
 
     save_figure(fig, output_dir / "airfoil_polars.png")
 
+
+def save_prandtl_distribution(r_over_R, axial_induction, tsr, output_dir):
+    """Save Prandtl total, tip and root factors over radial position."""
+    # Avoid singular behavior when (1-a) approaches zero in the correction formula.
+    axial_safe = np.clip(axial_induction, -0.95, 0.95)
+    prandtl_total, prandtl_tip, prandtl_root = PrandtlTipRootCorrection(
+        r_over_R,
+        RootLocation_R,
+        TipLocation_R,
+        tsr,
+        blades,
+        axial_safe,
+    )
+
+    fig = plt.figure(figsize=(12, 6))
+    plt.plot(r_over_R, prandtl_total, "r-", label="Prandtl total")
+    plt.plot(r_over_R, prandtl_tip, "g--", label="Prandtl tip")
+    plt.plot(r_over_R, prandtl_root, "b-.", label="Prandtl root")
+    plt.xlabel("r/R")
+    plt.ylabel("Correction factor")
+    plt.title(f"Prandtl correction factors vs radial position (TSR = {tsr})")
+    plt.grid()
+    plt.legend()
+    save_figure(fig, output_dir / f"{tsr_folder_name(tsr)}_prandtl_factors.png")
+
 def initialise(N):
     # BLOCK 0.2 : Section streamtubes
     delta_r_R = 1/N # non-dimensioned width of blade element, in fraction of rotor radius
@@ -375,6 +400,7 @@ def main():
         tsr_output_dir = FIGURES_DIR / tsr_folder_name(TSR[j])
         CT, CP, results, Thrust, Torque, J = executeBEM(U0, TSR[j], RootLocation_R, TipLocation_R,
         Omega[j], Radius, blades, r_R, chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd, plot_results=True, output_dir=tsr_output_dir)
+        save_prandtl_distribution(results[:,2], results[:,0], TSR[j], tsr_output_dir)
 
         CTlist[j] = CT
         CPlist[j] = CP
