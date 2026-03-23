@@ -21,7 +21,7 @@ TipLocation_R = 1.0 # m, distance from center where blades end
 blade_pitch = -2 # degrees, pitch angle at the root of the blade
 visualise = False # whether to visualise results of BEM solver
 FIGURES_DIR = Path("figures")
-
+figsize=(12, 6)
 
 def prepare_output_directory(base_dir):
     """Recreate clean figures directory for a fresh run."""
@@ -47,15 +47,15 @@ def save_figure(fig, file_path):
 
 def save_airfoil_polars(output_dir):
     """Save general airfoil polar plots in the root figures directory."""
-    fig, axs = plt.subplots(1, 2, figsize=(12, 6))
-    axs[0].plot(polar_alpha, polar_cl, "b-")
+    fig, axs = plt.subplots(1, 2, figsize=(4, 4))
+    axs[0].plot(polar_alpha, polar_cl, "b-", linewidth=2)
     axs[0].set_xlim([-30, 30])
     axs[0].set_xlabel(r"$\alpha$")
     axs[0].set_ylabel(r"$C_l$")
     axs[0].set_title("Lift Coefficient vs Angle of Attack")
     axs[0].grid()
 
-    axs[1].plot(polar_cd, polar_cl, "r-")
+    axs[1].plot(polar_cd, polar_cl, "r-", linewidth=2)
     axs[1].set_xlim([0, 0.1])
     axs[1].set_xlabel(r"$C_d$")
     axs[1].set_ylabel(r"$C_l$")
@@ -80,10 +80,10 @@ def save_prandtl_distribution(r_over_R, axial_induction, tsr, output_dir):
         axial_safe,
     )
 
-    fig = plt.figure(figsize=(12, 6))
-    plt.plot(r_over_R, prandtl_total, "r-", label="Prandtl total")
-    plt.plot(r_over_R, prandtl_tip, "g--", label="Prandtl tip")
-    plt.plot(r_over_R, prandtl_root, "b-.", label="Prandtl root")
+    fig = plt.figure(figsize=(4, 4))
+    plt.plot(r_over_R, prandtl_total, "r-", label="Prandtl total", linewidth=2)
+    plt.plot(r_over_R, prandtl_tip, "g--", label="Prandtl tip", linewidth=2)
+    plt.plot(r_over_R, prandtl_root, "b-.", label="Prandtl root", linewidth=2)
     plt.xlabel("r/R")
     plt.ylabel("Correction factor")
     plt.title(f"Prandtl correction factors vs radial position (TSR = {tsr})")
@@ -252,10 +252,10 @@ def solveStreamtube(Uinf, r1_R, r2_R, rootradius_R, tipradius_R , Omega, Radius,
 
 # --------- Module 4 : BEM executor ---------
 def visualiser(results, Uinf, Radius, tsr, output_dir=None):
-    fig1 = plt.figure(figsize=(12,6))
+    fig1 = plt.figure(figsize=(4, 4))
     plt.title(f'Spanwise distribution of angles (TSR = {tsr})')
-    plt.plot(results[:,2], results[:,6], 'b-', label='Angle of attack (deg)')
-    plt.plot(results[:,2], results[:,7], 'r--', label='Inflow angle (deg)')
+    plt.plot(results[:,2], results[:,6], 'b-', label='Angle of attack (deg)', linewidth=2)
+    plt.plot(results[:,2], results[:,7], 'r--', label='Inflow angle (deg)', linewidth=2)
     plt.xlabel('r/R')
     plt.ylabel('Angle (deg)')
     plt.grid()
@@ -263,20 +263,20 @@ def visualiser(results, Uinf, Radius, tsr, output_dir=None):
     if output_dir is not None:
         save_figure(fig1, output_dir / f"{tsr_folder_name(tsr)}_spanwise_angles.png")
 
-    fig2 = plt.figure(figsize=(12, 6))
+    fig2 = plt.figure(figsize=(4, 4))
     plt.title(f'Axial and tangential induction (TSR = {tsr})')
-    plt.plot(results[:,2], results[:,0], 'r-', label=r'$a$')
-    plt.plot(results[:,2], results[:,1], 'g--', label=r'$a^,$')
+    plt.plot(results[:,2], results[:,0], 'r-', label=r'$a$', linewidth=2)
+    plt.plot(results[:,2], results[:,1], 'g--', label=r'$a^,$', linewidth=2)
     plt.grid()
     plt.xlabel('r/R')
     plt.legend()
     if output_dir is not None:
         save_figure(fig2, output_dir / f"{tsr_folder_name(tsr)}_induction.png")
 
-    fig3 = plt.figure(figsize=(12, 6))
+    fig3 = plt.figure(figsize=(4, 4))
     plt.title(rf'Normal and tangential force, non-dimensioned by $\frac{{1}}{{2}} U_\infty^2 R$ (TSR = {tsr})')
-    plt.plot(results[:,2], results[:,3]/(0.5*Uinf**2*Radius), 'r-', label=r'Fnorm')
-    plt.plot(results[:,2], results[:,4]/(0.5*Uinf**2*Radius), 'g--', label=r'Ftan')
+    plt.plot(results[:,2], results[:,3]/(0.5*Uinf**2*Radius), 'r-', label=r'Fnorm', linewidth=2)
+    plt.plot(results[:,2], results[:,4]/(0.5*Uinf**2*Radius), 'g--', label=r'Ftan', linewidth=2)
     plt.grid()
     plt.xlabel('r/R')
     plt.legend()
@@ -298,7 +298,7 @@ def visualiser_combined(results_by_tsr, Uinf, Radius, output_dir):
     colors = plt.cm.tab10(np.linspace(0, 1, len(tsr_values)))
 
     # Angle of attack only
-    fig_alpha = plt.figure(figsize=(12, 6))
+    fig_alpha = plt.figure(figsize=(4, 4))
     plt.title("Spanwise angle of attack (all TSR cases)")
     for tsr, color in zip(tsr_values, colors):
         results = results_by_tsr[tsr]
@@ -310,7 +310,7 @@ def visualiser_combined(results_by_tsr, Uinf, Radius, output_dir):
     save_figure(fig_alpha, output_dir / "combined_angle_of_attack.png")
 
     # Inflow angle only
-    fig_inflow = plt.figure(figsize=(12, 6))
+    fig_inflow = plt.figure(figsize=(4, 4))
     plt.title("Spanwise inflow angle (all TSR cases)")
     for tsr, color in zip(tsr_values, colors):
         results = results_by_tsr[tsr]
@@ -322,7 +322,7 @@ def visualiser_combined(results_by_tsr, Uinf, Radius, output_dir):
     save_figure(fig_inflow, output_dir / "combined_inflow_angle.png")
 
     # Axial induction only
-    fig_a = plt.figure(figsize=(12, 6))
+    fig_a = plt.figure(figsize=(4, 4))
     plt.title('Spanwise axial induction (all TSR cases)')
     for tsr, color in zip(tsr_values, colors):
         results = results_by_tsr[tsr]
@@ -334,7 +334,7 @@ def visualiser_combined(results_by_tsr, Uinf, Radius, output_dir):
     save_figure(fig_a, output_dir / "combined_axial_induction.png")
 
     # Tangential induction only
-    fig_aprime = plt.figure(figsize=(12, 6))
+    fig_aprime = plt.figure(figsize=(4, 4))
     plt.title('Spanwise tangential induction (all TSR cases)')
     for tsr, color in zip(tsr_values, colors):
         results = results_by_tsr[tsr]
@@ -346,11 +346,11 @@ def visualiser_combined(results_by_tsr, Uinf, Radius, output_dir):
     save_figure(fig_aprime, output_dir / "combined_tangential_induction.png")
 
     # Normal force only
-    fig_fnorm = plt.figure(figsize=(12, 6))
+    fig_fnorm = plt.figure(figsize=(4, 4))
     plt.title(r'Normal force, non-dimensioned by $\frac{1}{2} U_\infty^2 R$ (all TSR cases)')
     for tsr, color in zip(tsr_values, colors):
         results = results_by_tsr[tsr]
-        plt.plot(results[:,2], results[:,3]/(0.5*Uinf**2*Radius), '-', color=color, label=f'TSR = {tsr}')
+        plt.plot(results[:,2], results[:,3]/(0.5*Uinf**2*Radius), '-', color=color, label=f'TSR = {tsr}', linewidth=2)
     plt.xlabel('r/R')
     plt.ylabel('Fnorm*')
     plt.grid()
@@ -358,11 +358,11 @@ def visualiser_combined(results_by_tsr, Uinf, Radius, output_dir):
     save_figure(fig_fnorm, output_dir / "combined_normal_force.png")
 
     # Tangential force only
-    fig_ftan = plt.figure(figsize=(12, 6))
+    fig_ftan = plt.figure(figsize=(4, 4))
     plt.title(r'Tangential force, non-dimensioned by $\frac{1}{2} U_\infty^2 R$ (all TSR cases)')
     for tsr, color in zip(tsr_values, colors):
         results = results_by_tsr[tsr]
-        plt.plot(results[:,2], results[:,4]/(0.5*Uinf**2*Radius), '-', color=color, label=f'TSR = {tsr}')
+        plt.plot(results[:,2], results[:,4]/(0.5*Uinf**2*Radius), '-', color=color, label=f'TSR = {tsr}', linewidth=2)
     plt.xlabel('r/R')
     plt.ylabel('Ftan*')
     plt.grid()
@@ -423,7 +423,7 @@ def executeBEM(Uinf, TSR, RootLocation_R, TipLocation_R , Omega, Radius, NBlades
 # BLOCK 5.1 :plot Prandtl tip, root and combined correction for a number of blades and induction 'a', over the non-dimensioned radius
 Prandtl, Prandtltip, Prandtlroot = PrandtlTipRootCorrection(r_R, blade_start/Radius, 1, TSR[0], blades, a)
 
-fig1 = plt.figure(figsize=(12, 6))
+fig1 = plt.figure(figsize=(4, 4))
 plt.plot(r_R, Prandtl, 'r-', label='Prandtl')
 plt.plot(r_R, Prandtltip, 'g.', label='Prandtl tip')
 plt.plot(r_R, Prandtlroot, 'b.', label='Prandtl root')
@@ -433,7 +433,7 @@ plt.legend()
 
 """
 # BLOCK 5.2 : plot airfoil polars as a function of angle of attack
-fig, axs = plt.subplots(1, 2, figsize=(12, 6))
+fig, axs = plt.subplots(1, 2, figsize=(4, 4))
 axs[0].plot(polar_alpha, polar_cl)
 axs[0].set_xlim([-30,30])
 axs[0].set_xlabel(r'$\alpha$')
@@ -471,10 +471,10 @@ def plot_convergence_combined(convergence_results, output_dir):
     tsr_values = list(convergence_results.keys())
     colors = plt.cm.tab10(np.linspace(0, 1, len(tsr_values)))
 
-    fig_ct = plt.figure(figsize=(12, 6))
+    fig_ct = plt.figure(figsize=(4, 4))
     for tsr, color in zip(tsr_values, colors):
         elements, ct_values, _ = convergence_results[tsr]
-        plt.plot(elements, ct_values, 'o-', color=color, label=f'TSR = {tsr}')
+        plt.plot(elements, ct_values, 'o-', color=color, label=f'TSR = {tsr}', linewidth=2)
     plt.xlabel('Number of annuli')
     plt.ylabel('Thrust coefficient (CT)')
     plt.title('Convergence of CT vs number of annuli (all TSR cases)')
@@ -482,10 +482,10 @@ def plot_convergence_combined(convergence_results, output_dir):
     plt.legend()
     save_figure(fig_ct, output_dir / 'combined_convergence_CT.png')
 
-    fig_cp = plt.figure(figsize=(12, 6))
+    fig_cp = plt.figure(figsize=(4, 4))
     for tsr, color in zip(tsr_values, colors):
         elements, _, cp_values = convergence_results[tsr]
-        plt.plot(elements, cp_values, 's--', color=color, label=f'TSR = {tsr}')
+        plt.plot(elements, cp_values, 's--', color=color, label=f'TSR = {tsr}', linewidth=2)
     plt.xlabel('Number of annuli')
     plt.ylabel('Power coefficient (CP)')
     plt.title('Convergence of CP vs number of annuli (all TSR cases)')
@@ -528,11 +528,11 @@ def main():
 
     visualiser_combined(results_by_tsr, U0, Radius, FIGURES_DIR)
 
-    fig_general, ax1 = plt.subplots(figsize=(12,6))
+    fig_general, ax1 = plt.subplots(figsize=(4, 4))
     ax2 = ax1.twinx()
 
-    line1, = ax1.plot(TSR/J_list, Thrust_list, 'bo-', label='Total Thrust')
-    line2, = ax2.plot(TSR/J_list, Torque_list, 'rs--', label='Total Torque')
+    line1, = ax1.plot(TSR/J_list, Thrust_list, 'bo-', label='Total Thrust', linewidth=2)
+    line2, = ax2.plot(TSR/J_list, Torque_list, 'rs--', label='Total Torque', linewidth=2)
 
     ax1.set_xlabel('TSR/J')
     ax1.set_ylabel('Total Thrust (N)', color='b')
