@@ -19,7 +19,7 @@ blades = 3 # number of blades
 RootLocation_R = 0.2 # m, distance from center where blades start
 TipLocation_R = 1.0 # m, distance from center where blades end
 blade_pitch = -2 # degrees, pitch angle at the root of the blade
-visualise = True # whether to visualise results of BEM solver
+visualise = False # whether to visualise results of BEM solver
 FIGURES_DIR = Path("figures")
 
 
@@ -379,7 +379,10 @@ def influence_annuli(tsr):
     plt.legend()
     save_figure(plt.gcf(), tsr_output_dir / f"{tsr_folder_name(tsr)}_convergence_CP.png")
 
-    plt.show()
+    if visualise:
+        plt.show()
+    else:
+        plt.close('all')
 
     return CTlist, CPlist
 
@@ -410,24 +413,26 @@ def main():
         
     iter_history = np.append(iter_history, [CTlist, CPlist]) 
 
-    if visualise == True:
-        fig_general, ax1 = plt.subplots(figsize=(12,6))
-        ax2 = ax1.twinx()
+    fig_general, ax1 = plt.subplots(figsize=(12,6))
+    ax2 = ax1.twinx()
 
-        line1, = ax1.plot(TSR/J_list, Thrust_list, 'bo-', label='Total Thrust')
-        line2, = ax2.plot(TSR/J_list, Torque_list, 'rs--', label='Total Torque')
+    line1, = ax1.plot(TSR/J_list, Thrust_list, 'bo-', label='Total Thrust')
+    line2, = ax2.plot(TSR/J_list, Torque_list, 'rs--', label='Total Torque')
 
-        ax1.set_xlabel('TSR/J')
-        ax1.set_ylabel('Total Thrust (N)', color='b')
-        ax2.set_ylabel('Total Torque (Nm)', color='r')
-        ax1.tick_params(axis='y', labelcolor='b')
-        ax2.tick_params(axis='y', labelcolor='r')
-        ax1.set_title('Rotor loads vs TSR/J (all TSR cases)')
-        ax1.grid()
-        ax1.legend([line1, line2], [line1.get_label(), line2.get_label()], loc='best')
+    ax1.set_xlabel('TSR/J')
+    ax1.set_ylabel('Total Thrust (N)', color='b')
+    ax2.set_ylabel('Total Torque (Nm)', color='r')
+    ax1.tick_params(axis='y', labelcolor='b')
+    ax2.tick_params(axis='y', labelcolor='r')
+    ax1.set_title('Rotor loads vs TSR/J (all TSR cases)')
+    ax1.grid()
+    ax1.legend([line1, line2], [line1.get_label(), line2.get_label()], loc='best')
 
-        save_figure(fig_general, FIGURES_DIR / "rotor_loads_vs_tsr_over_j.png")
+    save_figure(fig_general, FIGURES_DIR / "rotor_loads_vs_tsr_over_j.png")
+    if visualise:
         plt.show()
+    else:
+        plt.close(fig_general)
 
     convergence_results = {}
     for tsr in TSR:
