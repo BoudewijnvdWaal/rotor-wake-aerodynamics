@@ -47,7 +47,7 @@ def save_figure(fig, file_path):
 
 def save_airfoil_polars(output_dir):
     """Save general airfoil polar plots in the root figures directory."""
-    fig, axs = plt.subplots(1, 2, figsize=(4, 4))
+    fig, axs = plt.subplots(1, 2, figsize=(12, 6))
     axs[0].plot(polar_alpha, polar_cl, "b-", linewidth=2)
     axs[0].set_xlim([-30, 30])
     axs[0].set_xlabel(r"$\alpha$")
