@@ -1,5 +1,5 @@
 """
-Generate Ct and torque versus TSR from the BEM model and save the figure.
+Generate total thrust and total torque versus TSR from the BEM model and save the figure.
 """
 
 from pathlib import Path
@@ -8,6 +8,7 @@ import io
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.ticker import FuncFormatter
 
 from BEM_TG2303 import (
     U0,
@@ -23,9 +24,9 @@ from BEM_TG2303 import (
 )
 
 
-def compute_ct_torque_vs_tsr(tsr_values, n_annuli=100):
-    """Run BEM for each TSR and return Ct and torque arrays."""
-    ct_values = np.zeros(len(tsr_values))
+def compute_thrust_torque_vs_tsr(tsr_values, n_annuli=100):
+    """Run BEM for each TSR and return total thrust and torque arrays."""
+    thrust_values = np.zeros(len(tsr_values))
     torque_values = np.zeros(len(tsr_values))
 
     for i, tsr in enumerate(tsr_values):
@@ -34,7 +35,7 @@ def compute_ct_torque_vs_tsr(tsr_values, n_annuli=100):
 
         # Keep this script focused on the final Ct/Cp graph only.
         with contextlib.redirect_stdout(io.StringIO()):
-            ct, _, _, _, torque, _ = executeBEM(
+            _, _, _, thrust, torque, _ = executeBEM(
                 U0,
                 tsr,
                 RootLocation_R,
@@ -52,16 +53,16 @@ def compute_ct_torque_vs_tsr(tsr_values, n_annuli=100):
                 output_dir=None,
             )
 
-        ct_values[i] = ct
+        thrust_values[i] = thrust
         torque_values[i] = torque
 
-    return ct_values, torque_values
+    return thrust_values, torque_values
 
 
-def plot_ct_torque_vs_tsr(tsr_values, ct_values, torque_values, output_file):
-    """Create and save a dual-axis plot for torque and Ct versus TSR."""
+def plot_thrust_torque_vs_tsr(tsr_values, thrust_values, torque_values, output_file):
+    """Create and save a dual-axis plot for total thrust and torque versus TSR."""
     fig, ax_torque = plt.subplots(figsize=(10, 6))
-    ax_ct = ax_torque.twinx()
+    ax_thrust = ax_torque.twinx()
 
     line_torque, = ax_torque.plot(
         tsr_values,
@@ -70,42 +71,74 @@ def plot_ct_torque_vs_tsr(tsr_values, ct_values, torque_values, output_file):
         color="tab:blue",
         linewidth=1.8,
         markersize=6,
-        label="Torque (Nm)",
+        label="Total Torque (Nm)",
     )
-    line_ct, = ax_ct.plot(
+    line_thrust, = ax_thrust.plot(
         tsr_values,
-        ct_values,
+        thrust_values,
         "x--",
         color="tab:red",
         linewidth=1.8,
         markersize=6,
-        label="Thrust Coefficient (C_t)",
+        label="Total Thrust (N)",
     )
 
-    ax_torque.set_title("Performance vs TSR")
+    ax_torque.set_title("Total Rotor Thrust and Torque vs Tip-Speed Ratio")
     ax_torque.set_xlabel("Tip-Speed Ratio (TSR)")
-    ax_torque.set_ylabel("Torque (Nm)", color="tab:blue")
-    ax_ct.set_ylabel("Thrust Coefficient (C_t)", color="tab:red")
+    ax_torque.set_ylabel("Total Torque (Nm)", color="tab:blue")
+    ax_thrust.set_ylabel("Total Thrust (N)", color="tab:red")
 
     ax_torque.tick_params(axis="y", labelcolor="tab:blue")
-    ax_ct.tick_params(axis="y", labelcolor="tab:red")
+    ax_thrust.tick_params(axis="y", labelcolor="tab:red")
+    # Use scaled tick labels (manual scientific notation) so the x10^x text can be placed at the bottom.
+    ax_torque.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y / 1e6:.1f}"))
+    ax_thrust.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y / 1e5:.1f}"))
     ax_torque.grid(True)
 
-    ax_torque.legend([line_torque, line_ct], [line_torque.get_label(), line_ct.get_label()], loc="best")
+    legend = ax_torque.legend(
+        [line_torque, line_thrust],
+        [line_torque.get_label(), line_thrust.get_label()],
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        ncol=1,
+        framealpha=1.0,
+    )
+    legend.set_zorder(10)
+
+    # Manually place scientific notation indicators at the bottom of both y-axes.
+    ax_torque.text(
+        0.0,
+        -0.10,
+        r"$\times10^{6}$",
+        transform=ax_torque.transAxes,
+        color="tab:blue",
+        ha="left",
+        va="top",
+    )
+    ax_thrust.text(
+        1.0,
+        -0.10,
+        r"$\times10^{5}$",
+        transform=ax_thrust.transAxes,
+        color="tab:red",
+        ha="right",
+        va="top",
+    )
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
     fig.savefig(output_file, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
 def main():
     tsr_values = np.arange(4.0, 12.5, 0.5)
-    ct_values, torque_values = compute_ct_torque_vs_tsr(tsr_values, n_annuli=100)
+    thrust_values, torque_values = compute_thrust_torque_vs_tsr(tsr_values, n_annuli=100)
 
-    output_file = Path("figures") / "ct_and_torque_versus_tsr.png"
-    plot_ct_torque_vs_tsr(tsr_values, ct_values, torque_values, output_file)
+    output_file = Path("figures") / "thrust_and_torque_versus_tsr.png"
+    plot_thrust_torque_vs_tsr(tsr_values, thrust_values, torque_values, output_file)
 
-    print(f"Saved Ct/torque vs TSR graph to: {output_file}")
+    print(f"Saved thrust/torque vs TSR graph to: {output_file}")
 
 
 if __name__ == "__main__":
