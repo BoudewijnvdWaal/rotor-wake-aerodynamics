@@ -1,5 +1,5 @@
 """
-Generate Ct and Cp versus TSR from the BEM model and save the figure.
+Generate Ct and torque versus TSR from the BEM model and save the figure.
 """
 
 from pathlib import Path
@@ -23,10 +23,10 @@ from BEM_TG2303 import (
 )
 
 
-def compute_ct_cp_vs_tsr(tsr_values, n_annuli=100):
-    """Run BEM for each TSR and return Ct and Cp arrays."""
+def compute_ct_torque_vs_tsr(tsr_values, n_annuli=100):
+    """Run BEM for each TSR and return Ct and torque arrays."""
     ct_values = np.zeros(len(tsr_values))
-    cp_values = np.zeros(len(tsr_values))
+    torque_values = np.zeros(len(tsr_values))
 
     for i, tsr in enumerate(tsr_values):
         omega = tsr * U0 / Radius
@@ -34,7 +34,7 @@ def compute_ct_cp_vs_tsr(tsr_values, n_annuli=100):
 
         # Keep this script focused on the final Ct/Cp graph only.
         with contextlib.redirect_stdout(io.StringIO()):
-            ct, cp, _, _, _, _ = executeBEM(
+            ct, _, _, _, torque, _ = executeBEM(
                 U0,
                 tsr,
                 RootLocation_R,
@@ -53,24 +53,24 @@ def compute_ct_cp_vs_tsr(tsr_values, n_annuli=100):
             )
 
         ct_values[i] = ct
-        cp_values[i] = cp
+        torque_values[i] = torque
 
-    return ct_values, cp_values
+    return ct_values, torque_values
 
 
-def plot_ct_cp_vs_tsr(tsr_values, ct_values, cp_values, output_file):
-    """Create and save a dual-axis plot for Cp and Ct versus TSR."""
-    fig, ax_cp = plt.subplots(figsize=(10, 6))
-    ax_ct = ax_cp.twinx()
+def plot_ct_torque_vs_tsr(tsr_values, ct_values, torque_values, output_file):
+    """Create and save a dual-axis plot for torque and Ct versus TSR."""
+    fig, ax_torque = plt.subplots(figsize=(10, 6))
+    ax_ct = ax_torque.twinx()
 
-    line_cp, = ax_cp.plot(
+    line_torque, = ax_torque.plot(
         tsr_values,
-        cp_values,
+        torque_values,
         "o-",
         color="tab:blue",
         linewidth=1.8,
         markersize=6,
-        label="Power Coefficient (C_p)",
+        label="Torque (Nm)",
     )
     line_ct, = ax_ct.plot(
         tsr_values,
@@ -82,16 +82,16 @@ def plot_ct_cp_vs_tsr(tsr_values, ct_values, cp_values, output_file):
         label="Thrust Coefficient (C_t)",
     )
 
-    ax_cp.set_title("Performance vs TSR")
-    ax_cp.set_xlabel("Tip-Speed Ratio (TSR)")
-    ax_cp.set_ylabel("Power Coefficient (C_p)", color="tab:blue")
+    ax_torque.set_title("Performance vs TSR")
+    ax_torque.set_xlabel("Tip-Speed Ratio (TSR)")
+    ax_torque.set_ylabel("Torque (Nm)", color="tab:blue")
     ax_ct.set_ylabel("Thrust Coefficient (C_t)", color="tab:red")
 
-    ax_cp.tick_params(axis="y", labelcolor="tab:blue")
+    ax_torque.tick_params(axis="y", labelcolor="tab:blue")
     ax_ct.tick_params(axis="y", labelcolor="tab:red")
-    ax_cp.grid(True)
+    ax_torque.grid(True)
 
-    ax_cp.legend([line_cp, line_ct], [line_cp.get_label(), line_ct.get_label()], loc="best")
+    ax_torque.legend([line_torque, line_ct], [line_torque.get_label(), line_ct.get_label()], loc="best")
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_file, dpi=300, bbox_inches="tight")
@@ -100,12 +100,12 @@ def plot_ct_cp_vs_tsr(tsr_values, ct_values, cp_values, output_file):
 
 def main():
     tsr_values = np.arange(4.0, 12.5, 0.5)
-    ct_values, cp_values = compute_ct_cp_vs_tsr(tsr_values, n_annuli=100)
+    ct_values, torque_values = compute_ct_torque_vs_tsr(tsr_values, n_annuli=100)
 
-    output_file = Path("figures") / "ct_and_cp_versus_tsr.png"
-    plot_ct_cp_vs_tsr(tsr_values, ct_values, cp_values, output_file)
+    output_file = Path("figures") / "ct_and_torque_versus_tsr.png"
+    plot_ct_torque_vs_tsr(tsr_values, ct_values, torque_values, output_file)
 
-    print(f"Saved Ct/Cp vs TSR graph to: {output_file}")
+    print(f"Saved Ct/torque vs TSR graph to: {output_file}")
 
 
 if __name__ == "__main__":
