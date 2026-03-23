@@ -234,6 +234,7 @@ def solveStreamtube(Uinf, r1_R, r2_R, rootradius_R, tipradius_R , Omega, Radius,
     
     iteration = 0
     Erroriterations = 0.000001 # error limit for iteration process, in absolute value of induction
+    ct_history = []
 
     while abs(anew-a) > Erroriterations:
         iteration += 1
@@ -249,6 +250,7 @@ def solveStreamtube(Uinf, r1_R, r2_R, rootradius_R, tipradius_R , Omega, Radius,
       
         # calculate thrust coefficient at the streamtube 
         CT = load3Daxial/(0.5*Area*Uinf**2)
+        ct_history.append(CT)
 
         if not np.isfinite(CT):
             CT = 0.0
@@ -277,7 +279,7 @@ def solveStreamtube(Uinf, r1_R, r2_R, rootradius_R, tipradius_R , Omega, Radius,
             print("Warning: iteration process did not converge after 5000 iterations, with error limit of ", Erroriterations)
             break
 
-    return [a, aline, r_R, fnorm, ftan, gamma, alpha, phi]
+    return [a, aline, r_R, fnorm, ftan, gamma, alpha, phi], ct_history
 
 # --------- Module 4 : BEM executor ---------
 def visualiser(results, Uinf, Radius, tsr, output_dir=None):
@@ -409,11 +411,13 @@ def visualiser_combined(results_by_tsr, Uinf, Radius, output_dir):
 # BLOCK 4.1 : Execute BEM solver for a given set of input parameters, and return the distribution of axial induction, tangential induction, loads and circulation along the blade
 def executeBEM(Uinf, TSR, RootLocation_R, TipLocation_R , Omega, Radius, NBlades, r_R, chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd, plot_results=True, output_dir=None):
     results = np.zeros([len(r_R)-1, 8])
+    all_ct_histories = []
 
     for i in range(len(r_R)-1):
         chord = np.interp((r_R[i]+r_R[i+1])/2, r_R, chord_distribution)
         twist = np.interp((r_R[i]+r_R[i+1])/2, r_R, twist_distribution)
-        results[i,:] = solveStreamtube(Uinf, r_R[i], r_R[i+1], RootLocation_R, TipLocation_R , Omega, Radius, NBlades, chord, twist, polar_alpha, polar_cl, polar_cd)
+        results[i,:], ct_history = solveStreamtube(Uinf, r_R[i], r_R[i+1], RootLocation_R, TipLocation_R , Omega, Radius, NBlades, chord, twist, polar_alpha, polar_cl, polar_cd)
+        all_ct_histories.append(ct_history)
 
     areas = (r_R[1:]**2-r_R[:-1]**2)*np.pi*Radius**2
     dr = (r_R[1:]-r_R[:-1])*Radius
@@ -444,7 +448,7 @@ def executeBEM(Uinf, TSR, RootLocation_R, TipLocation_R , Omega, Radius, NBlades
     print("Torque =", Torque, "Nm")
     
 
-    return CT, CP, results, Thrust, Torque, J
+    return CT, CP, results, Thrust, Torque, J, all_ct_histories
 
 
 # --------- Module 5 : Visualiser ---------
@@ -483,7 +487,7 @@ def influence_annuli(tsr, spacing="uniform"):
 
     for i in range(len(elements)):
         r_R, chord_distribution, twist_distribution, a, aline = initialise(elements[i], spacing=spacing) # initialize blade element positions and distributions for given number of blade elements
-        CT, CP, results, Thrust, Torque, J = executeBEM(U0, tsr, RootLocation_R, TipLocation_R,
+        CT, CP, results, Thrust, Torque, J, all_ct_histories = executeBEM(U0, tsr, RootLocation_R, TipLocation_R,
             omega_convergence, Radius, blades, r_R, chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd, plot_results=False)
 
         CTlist[i] = CT
@@ -546,6 +550,83 @@ def plot_convergence_combined(convergence_results, output_dir):
         plt.close(fig_ct)
         plt.close(fig_cp)
 
+def plot_total_thrust_convergence(all_ct_histories, r_edges, u_inf, radius, tsr=None, output_dir=None):
+    """
+    Plot total thrust convergence over iterations using all annuli histories.
+    """
+    if not all_ct_histories:
+        return
+
+    annulus_areas = np.pi * ((r_edges[1:] * radius) ** 2 - (r_edges[:-1] * radius) ** 2)
+    rotor_area = np.pi * radius ** 2
+    rho_local = 1.225
+
+    max_iter = max(len(hist) for hist in all_ct_histories)
+    thrust_history = np.zeros(max_iter)
+
+    # For each global iteration, use the latest available value for annuli that already converged.
+    for k in range(max_iter):
+        ct_weighted_sum = 0.0
+        for i, hist in enumerate(all_ct_histories):
+            ct_i = hist[min(k, len(hist) - 1)]
+            if not np.isfinite(ct_i):
+                ct_i = 0.0
+            ct_weighted_sum += ct_i * annulus_areas[i]
+
+        ct_total_k = ct_weighted_sum / rotor_area
+        thrust_history[k] = 0.5 * rho_local * u_inf ** 2 * rotor_area * ct_total_k
+
+    fig = plt.figure(figsize=(6, 4))
+    plt.plot(range(1, max_iter + 1), thrust_history / 1000, 'b-o', markersize=4, linewidth=2)
+    plt.xlabel('Iteration Number')
+    plt.xlim(0, 20)
+    plt.ylabel('Total Thrust (kN)')
+    plt.title(f'Iteration History of Total Thrust (TSR={tsr})')
+    plt.grid(True, linestyle='--', alpha=0.7)
+
+    if output_dir is not None:
+        save_figure(fig, output_dir / f"thrust_iteration_convergence_tsr_{tsr}.png")
+
+    if visualise:
+        plt.show()
+    else:
+        plt.close(fig)
+
+
+def plot_aoa_on_drag_polar(results, tsr, output_dir=None):
+    """Plot blade-element AoA operating points on the Cl-Cd drag polar."""
+    if results is None or len(results) == 0:
+        return
+
+    alpha_elements = results[:, 6]
+    cl_elements = np.interp(alpha_elements, polar_alpha, polar_cl)
+    cd_elements = np.interp(alpha_elements, polar_alpha, polar_cd)
+    r_over_r = results[:, 2]
+
+    fig = plt.figure(figsize=(6, 5))
+    plt.plot(polar_cd, polar_cl, 'k-', linewidth=1, label='Airfoil polar')
+    scatter = plt.scatter(
+        cd_elements,
+        cl_elements,
+        c=r_over_r,
+        cmap='viridis',
+        s=40,
+        edgecolors='none',
+        label='Blade element AoA points',
+    )
+    cbar = plt.colorbar(scatter)
+    cbar.set_label('r/R')
+    plt.xlabel(r'$C_d$')
+    plt.ylabel(r'$C_l$')
+    plt.title(f'AoA operating points on drag polar (TSR = {tsr}, 100 annuli)')
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.legend(loc='best')
+
+    save_figure(fig, output_dir / f'aoa_on_drag_polar_tsr_{tsr}_100_annuli.png')
+
+    plt.show()
+
+
 def main():
     prepare_output_directory(FIGURES_DIR)
     save_airfoil_polars(FIGURES_DIR)
@@ -558,14 +639,23 @@ def main():
     Torque_list = np.zeros(len(TSR))
     J_list = np.zeros(len(TSR))
     results_by_tsr = {}
+    convergence_tsr = 8
+    selected_ct_histories = None
+    selected_r_edges = None
+    selected_results = None
 
     for j in range(len(TSR)):
         r_R, chord_distribution, twist_distribution, a, aline = initialise(100) # initialize blade element positions and distributions for 100 blade elements
         tsr_output_dir = FIGURES_DIR / tsr_folder_name(TSR[j])
-        CT, CP, results, Thrust, Torque, J = executeBEM(U0, TSR[j], RootLocation_R, TipLocation_R,
+        CT, CP, results, Thrust, Torque, J, all_ct_histories = executeBEM(U0, TSR[j], RootLocation_R, TipLocation_R,
         Omega[j], Radius, blades, r_R, chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd, plot_results=False, output_dir=tsr_output_dir)
         save_prandtl_distribution(results[:,2], results[:,0], TSR[j], tsr_output_dir)
         results_by_tsr[TSR[j]] = results
+
+        if TSR[j] == convergence_tsr:
+            selected_ct_histories = all_ct_histories
+            selected_r_edges = r_R
+            selected_results = results
 
         CTlist[j] = CT
         CPlist[j] = CP
@@ -599,15 +689,36 @@ def main():
         plt.close(fig_general)
 
     convergence_results = {}
-    convergence_tsr = 8
     if convergence_tsr in TSR:
         convergence_results[convergence_tsr] = influence_annuli(convergence_tsr, spacing="uniform")
     else:
         print(f"Warning: TSR={convergence_tsr} not found in TSR list; using TSR={TSR[0]} for convergence study.")
         convergence_results[TSR[0]] = influence_annuli(TSR[0], spacing="uniform")
+        if selected_ct_histories is None:
+            r_R_fallback, chord_distribution, twist_distribution, a, aline = initialise(100)
+            omega_fallback = TSR[0] * U0 / Radius
+            _, _, _, _, _, _, selected_ct_histories = executeBEM(
+                U0, TSR[0], RootLocation_R, TipLocation_R, omega_fallback, Radius, blades,
+                r_R_fallback, chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd,
+                plot_results=False, output_dir=None
+            )
+            selected_r_edges = r_R_fallback
 
     plot_convergence_combined(convergence_results, FIGURES_DIR)
     plot_ct_spacing_comparison(convergence_tsr if convergence_tsr in TSR else TSR[0], FIGURES_DIR)
+    plot_total_thrust_convergence(
+        selected_ct_histories,
+        selected_r_edges,
+        U0,
+        Radius,
+        tsr=convergence_tsr if convergence_tsr in TSR else TSR[0],
+        output_dir=FIGURES_DIR,
+    )
+    plot_aoa_on_drag_polar(
+        selected_results,
+        tsr=convergence_tsr if convergence_tsr in TSR else TSR[0],
+        output_dir=FIGURES_DIR,
+    )
 
 if __name__ == "__main__":
     main()
