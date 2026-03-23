@@ -179,7 +179,9 @@ def loadBladeElement(vnorm, vtan, r_R, chord, twist, polar_alpha, polar_cl, pola
     vmag2 = vnorm**2 + vtan**2
     inflowangle = np.arctan2(vnorm,vtan)
     inflowangle_deg = inflowangle * 180/np.pi
-    alpha = twist + inflowangle_deg
+    # Angle convention from lecture: alpha = phi - beta, with beta = twist + pitch.
+    beta = twist + blade_pitch
+    alpha = inflowangle_deg - beta
     cl = np.interp(alpha, polar_alpha, polar_cl)
     cd = np.interp(alpha, polar_alpha, polar_cd)
     lift = 0.5*vmag2*cl*chord
