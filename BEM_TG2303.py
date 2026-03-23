@@ -93,11 +93,20 @@ def save_prandtl_distribution(r_over_R, axial_induction, tsr, output_dir):
     if not visualise:
         plt.close(fig)
 
-def initialise(N):
+def build_annuli_edges(N, spacing="uniform"):
+    """Return annulus edge locations between root and tip for the chosen spacing method."""
+    if spacing == "uniform":
+        return np.linspace(RootLocation_R, TipLocation_R, N + 1)
+    if spacing == "cosine":
+        theta = np.linspace(0.0, np.pi, N + 1)
+        cosine_map = 0.5 * (1.0 - np.cos(theta))
+        return RootLocation_R + (TipLocation_R - RootLocation_R) * cosine_map
+    raise ValueError("spacing must be 'uniform' or 'cosine'")
+
+
+def initialise(N, spacing="uniform"):
     # BLOCK 0.2 : Section streamtubes
-    delta_r_R = 1/N # non-dimensioned width of blade element, in fraction of rotor radius
-    #delta_r_R = 0.01 # non-dimensioned width of blade element, in fraction of rotor radius
-    r_R = np.arange(RootLocation_R, TipLocation_R + delta_r_R, delta_r_R) # non-dimensioned radial position of blade element, in fraction of rotor radius
+    r_R = build_annuli_edges(N, spacing=spacing) # non-dimensioned radial position of blade element edges, in fraction of rotor radius
     chord_distribution = 3*(1-r_R) + 1 # m, chord distribution along the blade, linearly decreasing from 4 m at the root to 1 m at the tip
     twist_distribution = 14*(1-r_R) # degrees, twist distribution along the blade,
 
@@ -163,12 +172,21 @@ def PrandtlTipRootCorrection(r_R, rootradius_R, tipradius_R, TSR, NBlades, axial
     This function calcualte steh combined tip and root Prandtl correction at agiven radial position 'r_R' (non-dimensioned by rotor radius), 
     given a root and tip radius (also non-dimensioned), a tip speed ratio TSR, the number lf blades NBlades and the axial induction factor
     """
-    temp1 = -NBlades/2*(tipradius_R-r_R)/r_R*np.sqrt( 1+ ((TSR*r_R)**2)/((1-axial_induction)**2))
-    Ftip = np.array(2/np.pi*np.arccos(np.exp(temp1)))
+    # Clamp induction to keep Prandtl terms numerically stable for strongly clustered annuli.
+    axial_safe = np.clip(axial_induction, -0.5, 0.95)
+    one_minus_a_sq = np.maximum((1 - axial_safe) ** 2, 1e-8)
+    sqrt_term = np.sqrt(1 + ((TSR * r_R) ** 2) / one_minus_a_sq)
+
+    temp1 = -NBlades / 2 * (tipradius_R - r_R) / r_R * sqrt_term
+    temp1 = np.clip(temp1, -50, 50)
+    Ftip = np.array(2 / np.pi * np.arccos(np.clip(np.exp(temp1), 0.0, 1.0)))
     Ftip[np.isnan(Ftip)] = 0
-    temp1 = NBlades/2*(rootradius_R-r_R)/r_R*np.sqrt( 1+ ((TSR*r_R)**2)/((1-axial_induction)**2))
-    Froot = np.array(2/np.pi*np.arccos(np.exp(temp1)))
+
+    temp1 = NBlades / 2 * (rootradius_R - r_R) / r_R * sqrt_term
+    temp1 = np.clip(temp1, -50, 50)
+    Froot = np.array(2 / np.pi * np.arccos(np.clip(np.exp(temp1), 0.0, 1.0)))
     Froot[np.isnan(Froot)] = 0
+
     return Froot*Ftip, Ftip, Froot
 
 # BLOCK 2.2 : Calculate normal and tangential forces in blade element, given the velocity at the blade element and the polar of the airfoil
@@ -220,8 +238,10 @@ def solveStreamtube(Uinf, r1_R, r2_R, rootradius_R, tipradius_R , Omega, Radius,
     while abs(anew-a) > Erroriterations:
         iteration += 1
         # calculate velocity and loads at blade element
-        Urotor = Uinf*(1-a) # axial velocity at rotor
-        Utan = (1+aline)*Omega*r_R*Radius # tangential velocity at rotor
+        one_minus_a = np.clip(1 - a, 1e-4, 5.0)
+        Urotor = Uinf * one_minus_a # axial velocity at rotor
+        Utan = (1 + np.clip(aline, -0.95, 1.5)) * Omega * r_R * Radius # tangential velocity at rotor
+
         # calculate loads in blade segment in 2D (N/m)
         fnorm, ftan, gamma, alpha, phi = loadBladeElement(Urotor, Utan, r_R, chord, twist, polar_alpha, polar_cl, polar_cd)
         load3Daxial =fnorm*Radius*(r2_R-r1_R)*NBlades # 3D force in axial direction
@@ -229,20 +249,29 @@ def solveStreamtube(Uinf, r1_R, r2_R, rootradius_R, tipradius_R , Omega, Radius,
       
         # calculate thrust coefficient at the streamtube 
         CT = load3Daxial/(0.5*Area*Uinf**2)
-        
+
+        if not np.isfinite(CT):
+            CT = 0.0
+        CT = np.clip(CT, -2.0, 2.0)
+
         # calculate new axial induction, accounting for Glauert's correction
-        anew =  ainduction(CT)
-        
+        anew = ainduction(CT)
+
         # correct new axial induction with Prandtl's correction
         Prandtl, Prandtltip, Prandtlroot = PrandtlTipRootCorrection(r_R, rootradius_R, tipradius_R, Omega*Radius/Uinf, NBlades, anew)
-        if (Prandtl < 0.0001): 
+        if (Prandtl < 0.0001):
             Prandtl = 0.0001 # avoid divide by zero
-        anew = anew/Prandtl # correct estimate of axial induction
-        a = 0.75*a+0.25*anew # for improving convergence, weigh current and previous iteration of axial induction
+        anew = np.clip(anew / Prandtl, -0.2, 0.95) # corrected estimate with bounded range
+        a = np.clip(0.75 * a + 0.25 * anew, -0.2, 0.95) # relax and bound to keep iteration stable
 
         # calculate aximuthal induction
-        aline = ftan*NBlades/(2*np.pi*Uinf*(1-a)*Omega*2*(r_R*Radius)**2)
-        aline =aline/Prandtl # correct estimate of azimuthal induction with Prandtl's correction
+        aline = ftan * NBlades / (2 * np.pi * Uinf * np.clip(1 - a, 1e-4, 5.0) * Omega * 2 * (r_R * Radius) ** 2)
+        aline = np.clip(aline / Prandtl, -0.95, 1.5) # corrected estimate of azimuthal induction with Prandtl's correction
+
+        if not np.isfinite(a) or not np.isfinite(aline):
+            a = 0.3
+            aline = 0.0
+            break
 
         if iteration > 5000:
             print("Warning: iteration process did not converge after 5000 iterations, with error limit of ", Erroriterations)
@@ -446,14 +475,14 @@ axs[1].grid()
 plt.show()
 """
 
-def influence_annuli(tsr):
+def influence_annuli(tsr, spacing="uniform"):
     elements = [5, 10, 20, 50, 100, 200, 500, 1000] # number of annuli to divide blade into, for convergence analysis
     CTlist = np.zeros(len(elements))
     CPlist = np.zeros(len(elements))
     omega_convergence = tsr * U0 / Radius
 
     for i in range(len(elements)):
-        r_R, chord_distribution, twist_distribution, a, aline = initialise(elements[i]) # initialize blade element positions and distributions for given number of blade elements
+        r_R, chord_distribution, twist_distribution, a, aline = initialise(elements[i], spacing=spacing) # initialize blade element positions and distributions for given number of blade elements
         CT, CP, results, Thrust, Torque, J = executeBEM(U0, tsr, RootLocation_R, TipLocation_R,
             omega_convergence, Radius, blades, r_R, chord_distribution, twist_distribution, polar_alpha, polar_cl, polar_cd, plot_results=False)
 
@@ -461,6 +490,26 @@ def influence_annuli(tsr):
         CPlist[i] = CP
 
     return np.array(elements), CTlist, CPlist
+
+
+def plot_ct_spacing_comparison(tsr, output_dir):
+    """Compare final converged CT for uniform and cosine annuli spacing."""
+    elements_uniform, ct_uniform, _ = influence_annuli(tsr, spacing="uniform")
+    elements_cosine, ct_cosine, _ = influence_annuli(tsr, spacing="cosine")
+
+    fig_compare = plt.figure(figsize=(4, 4))
+    plt.plot(elements_uniform, ct_uniform, 'o-', color='tab:blue', label='Uniform spacing', linewidth=2)
+    plt.plot(elements_cosine, ct_cosine, 's--', color='tab:orange', label='Cosine spacing', linewidth=2)
+    plt.xlim(0, 600)
+    plt.xlabel('Number of annuli')
+    plt.ylabel('Final converged thrust coefficient (CT)')
+    plt.title(f'CT convergence: uniform vs cosine spacing (TSR = {tsr})')
+    plt.grid()
+    plt.legend()
+    save_figure(fig_compare, output_dir / f'ct_spacing_comparison_tsr_{tsr}.png')
+
+    if not visualise:
+        plt.close(fig_compare)
 
 
 def plot_convergence_combined(convergence_results, output_dir):
@@ -552,12 +601,13 @@ def main():
     convergence_results = {}
     convergence_tsr = 8
     if convergence_tsr in TSR:
-        convergence_results[convergence_tsr] = influence_annuli(convergence_tsr)
+        convergence_results[convergence_tsr] = influence_annuli(convergence_tsr, spacing="uniform")
     else:
         print(f"Warning: TSR={convergence_tsr} not found in TSR list; using TSR={TSR[0]} for convergence study.")
-        convergence_results[TSR[0]] = influence_annuli(TSR[0])
+        convergence_results[TSR[0]] = influence_annuli(TSR[0], spacing="uniform")
 
     plot_convergence_combined(convergence_results, FIGURES_DIR)
+    plot_ct_spacing_comparison(convergence_tsr if convergence_tsr in TSR else TSR[0], FIGURES_DIR)
 
 if __name__ == "__main__":
     main()
